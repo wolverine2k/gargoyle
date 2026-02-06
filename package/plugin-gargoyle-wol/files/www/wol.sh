@@ -17,13 +17,14 @@ var wirelessDriver;
 var conntrackLines;
 var arpLines;
 <%
+	. /lib/functions/network.sh
 	sh /usr/lib/gargoyle/define_host_vars.sh
 	echo "var etherData = new Array();";
 	if [ -e /etc/ethers ] ; then
 		awk ' $0 ~ /^[\t ]*[0-9abcdefABCDEF]/ {print "etherData.push([\""$1"\",\""$2"\"]);"};' /etc/ethers
 	fi
-	wan_ip=$(uci -p /tmp/state get network.wan.ipaddr 2>/dev/null)
-	lan_ip=$(uci -p /tmp/state get network.lan.ipaddr 2>/dev/null)
+	network_get_ipaddr wan_ip wan
+	network_get_ipaddr lan_ip lan
 	echo "currentWanIp=\"$wan_ip\";"
 	echo "currentLanIp=\"$lan_ip\";"
 	echo "var bcastIp=\"$(ifconfig | awk '/^br-lan/{s=$1;getline;print $3}' | cut -b7-)\";"
@@ -42,10 +43,10 @@ var arpLines;
 				<div id="wol_table_container" class="table-responsive"></div>
 
 				<div id="wol_help">
+					<a id="wol_help_ref" href="javascript:setDescriptionVisibility('wol_help')"><%~ Hide %></a>
 					<span id="wol_help_txt">
-						<%~ WLHelp %>
+						<p><%~ WLHelp %></p>
 					</span>
-					<a id="wol_help_ref" onclick="setDescriptionVisibility('wol_help')" href="#wol_help"><%~ Hide %></a>
 				</div>
 			</div>
 

@@ -13,12 +13,17 @@
 <script>
 <!--
 <%
-	lan_iface=$(uci -P /var/state get network.lan.ifname)
-	wan_iface=$(uci -q -P /var/state get network.wan.ifname)
+	. /lib/functions/network.sh
+	network_get_device lan_iface lan || \
+		lan_iface=$(uci -q get network.lan.ifname)
+	network_get_device wan_iface wan || \
+		wan_iface=$(uci -q get network.wan.ifname)
 	echo "var lanIface=\"$lan_iface\";"
 	echo "var wanIface=\"$wan_iface\";"
 	echo "var routingData = new Array();"
+	echo "var routing6Data = new Array();"
 	route | awk ' {print "routingData.push(\""$0"\");"};'
+	route -A inet6 | sed 's/%[0-9]\{2\}//g' | grep -v '^fe80:*' | grep -v '^ff00::/8*' | awk ' {print "routing6Data.push(\""$0"\");"};'
 %>
 
 //-->
@@ -37,9 +42,7 @@
 			</div>
 		</div>
 	</div>
-</div>
 
-<div class="row">
 	<div class="col-lg-6">
 		<div class="panel panel-default">
 			<div class="panel-heading">
@@ -48,7 +51,7 @@
 
 			<div class="panel-body">
 				<div id="static_route_add_heading_container">
-					<label id="staticroute_add_heading_label" style="text-decoration:underline"><%~ ASRte %>:</label>
+					<label id="static_route_add_heading_label" style="text-decoration:underline"><%~ ASRte %>:</label>
 				</div>
 
 				<div class="row form-group">
@@ -63,6 +66,42 @@
 
 				<div class="row form-group">
 					<div id="static_route_table_container" class="col-xs-12 bottom_gap table-responsive"></div>
+				</div>
+			</div>
+		</div>
+	</div>
+</div>
+
+<div class="row">
+	<div class="col-lg-6">
+		<div class="panel panel-default">
+			<div class="panel-heading">
+				<h3 class="panel-title"><%~ routing.ARSect %></h3>
+			</div>
+			<div class="panel-body">
+				<div id="active_route6_table_container" class="table-responsive"></div>
+			</div>
+		</div>
+	</div>
+	<div class="col-lg-6">
+		<div class="panel panel-default">
+			<div class="panel-heading">
+				<h3 class="panel-title"><%~ SRSect %></h3>
+			</div>
+			<div class="panel-body">
+				<div id="static_route6_add_heading_container">
+					<label id="static_route6_add_heading_label" style="text-decoration:underline"><%~ ASRte %>:</label>
+				</div>
+				<div class="row form-group">
+					<div id="static_route6_add_container" class="col-xs-12">
+						<button id="add6_button" class="btn btn-primary btn-add" onclick="addStatic6Modal()"><%~ Add %></button>
+					</div>
+				</div>
+				<div id="static_route6_table_heading_container">
+					<label id="static_route6_current_heading_label" style="text-decoration:underline"><%~ CSRSect %>:</label>
+				</div>
+				<div class="row form-group">
+					<div id="static_route6_table_container" class="col-xs-12 bottom_gap table-responsive"></div>
 				</div>
 			</div>
 		</div>
@@ -88,6 +127,21 @@
 				<%in templates/static_route_template %>
 			</div>
 			<div class="modal-footer" id="static_route_modal_button_container">
+			</div>
+		</div>
+	</div>
+</div>
+
+<div class="modal fade" tabindex="-1" role="dialog" id="static_route6_modal" aria-hidden="true" aria-labelledby="static_route6_modal_title">
+	<div class="modal-dialog" role="document">
+		<div class="modal-content">
+			<div class="modal-header">
+				<h3 id="static_route6_modal_title" class="panel-title"><%~ ASRte %></h3>
+			</div>
+			<div class="modal-body">
+				<%in templates/static_route6_template %>
+			</div>
+			<div class="modal-footer" id="static_route6_modal_button_container">
 			</div>
 		</div>
 	</div>

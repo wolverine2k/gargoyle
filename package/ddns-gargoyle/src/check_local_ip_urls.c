@@ -82,7 +82,7 @@ char default_ip_lookup_url_data[][MAX_LOOKUP_URL_LENGTH] = {
 							"http://www.tracemyip.org",
 							"http://checkip.dyndns.org",
 							"http://checkip.org",
-							"https://aruljohn.com",
+							"https://api.aruljohn.com/ip",
 							"http://www.lawrencegoetz.com/programs/ipinfo/",
 							"http://myipinfo.net",
 							"http://www.myipnumber.com",
@@ -95,6 +95,7 @@ char default_ip_lookup_url_data[][MAX_LOOKUP_URL_LENGTH] = {
 							"https://ifconfig.co/ip",
 							"https://ipapi.co/ip",
 							"https://api.ip.sb/ip",
+							"https://ip2location.io/ip",
 							"\0"
 							};
 
@@ -329,7 +330,7 @@ char* get_random_user_agent(void)
 char* get_ip_from_url(char* url)
 {
 	char* ip = NULL;
-	http_response* page = get_url(url, get_random_user_agent());
+	http_response* page = get_url(url, get_random_user_agent(), EW_INET);
 	if(page != NULL)
 	{
 		if(page->data != NULL)

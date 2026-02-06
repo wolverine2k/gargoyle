@@ -3,7 +3,7 @@
 START=75
 
 BIN=tor
-RUN_D=/var/run
+RUN_D=/var/run/tor
 KEY_D=/etc/tor
 PID_F=$RUN_D/$BIN.pid
 OPID_F=$RUN_D/obfsproxy.pid
@@ -62,6 +62,8 @@ boot()
 
 start()
 {
+	. /lib/functions/network.sh
+	
 	enabled=$(uci get tor.global.enabled             2>/dev/null)
 	loglevel=$( uci get tor.global.loglevel          2>/dev/null)
 	control_port=$( uci get tor.global.control_port  2>/dev/null)
@@ -87,7 +89,7 @@ start()
 	init_dir "$tor_data_dir" "0700"
 	init_dir "$KEY_D"        "0700"
 	init_dir "$RUN_D"        "0755"
-	[ -h "$tor_data_dir/keys" ] || ( rm -rf "$tor_data_dir/keys" && ln -s "$KEY_D" "$tor_data_dir/keys" && chown -R $RON_USER:$RUN_GROUP "$tor_data_dir/keys" )
+	[ -h "$tor_data_dir/keys" ] || ( rm -rf "$tor_data_dir/keys" && ln -s "$KEY_D" "$tor_data_dir/keys" && chown -R $RUN_USER:$RUN_GROUP "$tor_data_dir/keys" )
 	[ -f "$PID_F" ] || ( touch "$PID_F" && chown $RUN_USER:$RUN_GROUP "$PID_F" )
 
 	OPTIONS="$OPTIONS  --Log '$loglevel syslog' --ControlPort $control_port --DataDirectory '$tor_data_dir' "
@@ -115,14 +117,13 @@ start()
 			dns_port=9053
 		fi
 
-		
-		client_listen_ip=$(uci -P /var/state get network.$client_zone.ipaddr 2>/dev/null)
+		network_get_ipaddr client_listen_ip "${client_zone}"
 		if [ -n "$client_listen_ip" ] ; then
 			OPTIONS="$OPTIONS  --TransPort '$client_listen_ip:$trans_port' --DNSPort '$client_listen_ip:$dns_port' "
 		else
 			OPTIONS="$OPTIONS  --TransPort $trans_port --DNSPort $dns_port "
 		fi
-		OPTIONS="$OPTIONS --VirtualAddrNetwork $hidden_service_subnet/$hidden_service_mask_bits --AutomapHostsOnResolve 1 "
+		OPTIONS="$OPTIONS --VirtualAddrNetworkIPv4 $hidden_service_subnet/$hidden_service_mask_bits --AutomapHostsOnResolve 1 "
 
 		use_bridge_ip=$(uci get tor.client.use_bridge_ip 2>/dev/null)
 		use_bridge_port=$(uci get tor.client.use_bridge_port 2>/dev/null)
@@ -150,6 +151,9 @@ start()
 		relay_ip=0.0.0.0
 
 		relay_options=" --ORPort $relay_ip:$relay_port "
+		if [ -z "$obfsproxy_port" ] || [ "$obfsproxy_port" = "0" ] ; then
+			relay_options=" $relay_options --ORPort [::]:$relay_port "
+		fi
 		if [ "$relay_mode" = "1" ] ; then
 			relay_options=" --BridgeRelay 1 $relay_options --BridgeRecordUsageByCountry 0  "
 			if [ -n "$obfsproxy_port" ] && [ "$obfsproxy_port" != "0" ] ; then

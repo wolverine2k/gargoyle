@@ -8,23 +8,26 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=p11-kit
-PKG_VERSION:=0.23.1
+PKG_VERSION:=0.25.3
 PKG_RELEASE:=1
+
+PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.xz
+PKG_SOURCE_URL:=https://github.com/p11-glue/p11-kit/releases/download/$(PKG_VERSION)
+PKG_HASH:=d8ddce1bb7e898986f9d250ccae7c09ce14d82f1009046d202a0eb1b428b2adc
+
 PKG_MAINTAINER:=Nikos Mavrogiannopoulos <n.mavrogiannopoulos@gmail.com>
-
-PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
-PKG_MD5SUM:=96f073270c489c9a594e1c9413f42db8
-PKG_SOURCE_URL:=http://p11-glue.freedesktop.org/releases/
-
-PKG_INSTALL:=1
+PKG_LICENSE:=BSD-3-Clause
+PKG_LICENSE_FILES:=COPYING
+PKG_CPE_ID:=cpe:/a:p11-kit_project:p11-kit
 
 include $(INCLUDE_DIR)/package.mk
+include $(INCLUDE_DIR)/meson.mk
 
 define Package/p11-kit
   SECTION:=libs
   CATEGORY:=Libraries
   TITLE:=A library that provides a way to load and enumerate PKCS11 modules.
-  URL:=http://p11-glue.freedesktop.org/p11-kit.html
+  URL:=https://p11-glue.github.io/p11-glue/p11-kit.html
   DEPENDS:=+libtasn1 +libpthread
 endef
 
@@ -34,14 +37,22 @@ define Package/p11-kit/description
   way that they are discoverable.
 endef
 
-CONFIGURE_ARGS+= \
-	--without-libffi
+TARGET_LDFLAGS += -Wl,--gc-sections
+
+MESON_ARGS += \
+	-Dhash_impl=internal \
+	-Dlibffi=disabled \
+	-Dtrust_module=disabled \
+	-Dstrict=false \
+	-Dsystemd=disabled \
+	-Dgtk_doc=false \
+	-Dman=false \
+	-Dnls=false
 
 define Build/InstallDev
 	$(INSTALL_DIR) $(1)/usr/include/p11-kit-1/p11-kit/
 	$(CP) $(PKG_INSTALL_DIR)/usr/include/p11-kit-1/p11-kit/* $(1)/usr/include/p11-kit-1/p11-kit/
 	$(INSTALL_DIR) $(1)/usr/lib
-	$(CP) $(PKG_INSTALL_DIR)/usr/lib/libp11-kit.so $(1)/usr/lib/
 	$(CP) $(PKG_INSTALL_DIR)/usr/lib/libp11-kit.so* $(1)/usr/lib/
 	$(INSTALL_DIR) $(1)/usr/lib/pkgconfig/
 	$(CP) $(PKG_INSTALL_DIR)/usr/lib/pkgconfig/p11-kit-1.pc $(1)/usr/lib/pkgconfig/p11-kit-1.pc
@@ -50,9 +61,9 @@ endef
 define Package/p11-kit/install
 	$(INSTALL_DIR) $(1)/usr/lib
 	$(CP) $(PKG_INSTALL_DIR)/usr/lib/libp11-kit.so.* $(1)/usr/lib/
-	$(INSTALL_DIR) $(1)/etc/p11-kit/modules/
+	$(INSTALL_DIR) $(1)/etc/pkcs11/modules/
 ifneq ($(CONFIG_PACKAGE_libopensc),)
-	$(CP) ./files/opensc.module $(1)/etc/p11-kit/modules/
+	$(CP) ./files/opensc.module $(1)/etc/pkcs11/modules/
 endif
 endef
 

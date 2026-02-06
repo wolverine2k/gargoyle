@@ -2,7 +2,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=plugin-gargoyle-email-notifications
 PKG_VERSION:=2.0
-PKG_RELEASE:=2
+PKG_RELEASE:=3
 
 
 PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_NAME)-$(BUILD_VARIANT)/$(PKG_NAME)-$(PKG_VERSION)
@@ -16,19 +16,20 @@ define Package/plugin-gargoyle-email-notifications/Default
 	TITLE:=Email notifications for Gargoyle
 	MAINTAINER:=dpint
 	PKGARCH:=all
+	DEPENDS:=gargoyle
 endef
 
 
 define Package/plugin-gargoyle-email-notifications
 $(call Package/plugin-gargoyle-email-notifications/Default)
-	DEPENDS:=gargoyle +msmtp +msmtp-mta +ca-bundle
+	DEPENDS+=msmtp
 	TITLE+= (with SSL support)
 	VARIANT:=ssl
 endef
 
 define Package/plugin-gargoyle-email-notifications-nossl
 $(call Package/plugin-gargoyle-email-notifications/Default)
-	DEPENDS:=gargoyle +msmtp-nossl +msmtp-mta
+	DEPENDS+=msmtp-nossl
 	TITLE+= (without SSL support)
 	VARIANT:=nossl
 endef

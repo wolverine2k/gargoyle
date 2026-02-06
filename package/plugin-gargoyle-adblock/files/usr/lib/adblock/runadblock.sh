@@ -18,7 +18,7 @@ ENDPOINT_IP4=`uci get adblock.config.endpoint4`
 CRON="0 4 * * 0 sh /plugin_root/usr/lib/adblock/runadblock.sh"
 
 #Check if Tor is enabled
-TOR=`uci get tor.global.enabled`
+TOR=`uci -q get tor.global.enabled`
 #### END CONFIG ####
 
 #### FUNCTIONS ####
@@ -42,11 +42,11 @@ add_config()
 	if [ "$EXEMPT" == 1 ]
 	then
 		logger -t ADBLOCK Exempting some clients from ad blocking
-		FW1="iptables -t nat -I PREROUTING -m iprange ! --src-range $START_RANGE-$END_RANGE -p tcp --dport 53 -j REDIRECT --to-ports 53"
-		FW2="iptables -t nat -I PREROUTING -m iprange ! --src-range $START_RANGE-$END_RANGE -p udp --dport 53 -j REDIRECT --to-ports 53"
+		FW1="nft insert rule inet fw4 dstnat ip saddr != $START_RANGE-$END_RANGE tcp dport 53 redirect to :53"
+		FW2="nft insert rule inet fw4 dstnat ip saddr != $START_RANGE-$END_RANGE udp dport 53 redirect to :53"
 	else
-		FW1="iptables -t nat -I PREROUTING -p tcp --dport 53 -j REDIRECT --to-ports 53"
-		FW2="iptables -t nat -I PREROUTING -p udp --dport 53 -j REDIRECT --to-ports 53"
+		FW1="nft insert rule inet fw4 dstnat tcp dport 53 redirect to :53"
+		FW2="nft insert rule inet fw4 dstnat udp dport 53 redirect to :53"
 	fi
  
 	#Update DHCP config
@@ -58,13 +58,18 @@ add_config()
 	echo "$CRON" >> /etc/crontabs/root
 
 	#Add firewall rules unless TOR is enabled
-	if [ "$TOR" == 1 ]
+	if [ "${TOR:-0}" == 1 ]
 	then
 		logger -t ADBLOCK Tor is enabled, discarding firewall rules
 	else
 		logger -t ADBLOCK Adding firewall rules
-		echo "$FW1" >> /etc/firewall.user
-		echo "$FW2" >> /etc/firewall.user
+		echo "$FW1" >> /etc/gargoyle_adblock.firewall
+		echo "$FW2" >> /etc/gargoyle_adblock.firewall
+		uci set firewall.gargoyle_adblock_include_file="include"
+		uci set firewall.gargoyle_adblock_include_file.type="script"
+		uci set firewall.gargoyle_adblock_include_file.path="/etc/gargoyle_adblock.firewall"
+		[ -z "$(command -v fw4)" ] && uci set firewall.gargoyle_adblock_include_file.reload=1
+		uci commit firewall
 	fi
 
 	# Modifying uHTTPd for transparent pixel support
@@ -87,7 +92,9 @@ remove_config()
 
 	# Remove firewall rules
 	logger -t ADBLOCK Removing firewall rules
-	sed -i '/--to-ports 53/d' /etc/firewall.user
+	rm /etc/gargoyle_adblock.firewall
+	uci delete firewall.gargoyle_adblock_include_file
+	uci commit firewall
 
 	# Remove pixel redirect
 	logger -t ADBLOCK Reverting uHTTPd error page
@@ -102,8 +109,8 @@ update_blocklist()
 
 	#Download and process the files needed to make the lists
 	logger -t ADBLOCK Retrieving ad lists from remote source
-	wget -qO- http://www.mvps.org/winhelp2002/hosts.txt| awk -v r="$ENDPOINT_IP4" '{sub(/^0.0.0.0/, r)} $0 ~ "^"r' > /tmp/block.build.list
-	wget -qO- "http://adaway.org/hosts.txt"|awk -v r="$ENDPOINT_IP4" '{sub(/^127.0.0.1/, r)} $0 ~ "^"r' >> /tmp/block.build.list
+	ewget http://winhelp2002.mvps.org/hosts.txt 2>/dev/null | awk -v r="$ENDPOINT_IP4" '{sub(/^0.0.0.0/, r)} $0 ~ "^"r' > /tmp/block.build.list
+	ewget https://adaway.org/hosts.txt 2>/dev/null |awk -v r="$ENDPOINT_IP4" '{sub(/^127.0.0.1/, r)} $0 ~ "^"r' >> /tmp/block.build.list
 
 	#Check we got a hosts file
 	if [ -s "/tmp/block.build.list" ]

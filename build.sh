@@ -8,11 +8,12 @@ set_constant_variables()
 	top_dir="${scriptpath%/${0##*/}}"
 	targets_dir="$top_dir/targets"
 	patches_dir="$top_dir/patches-generic"
+	files_dir="$top_dir/files-generic"
 	compress_js_dir="$top_dir/compressed_javascript"
 	compress_css_dir="$top_dir/compressed_css"
 	
-	node_version_tag="v6.3.1"
-	npm_version_tag="v3.10.4"
+	node_version_tag="v10.19.0"
+	npm_version_tag="v6.14.4"
 
 
 	#script for building netfilter patches
@@ -25,15 +26,15 @@ set_version_variables()
 {
 
 	#openwrt branch
-	branch_name="18.06"
-	branch_id="openwrt-18.06"
-	packages_branch="openwrt-18.06"
+	branch_name="24.10"
+	branch_id="openwrt-24.10"
+	packages_branch="openwrt-24.10"
 
 
 	# set precise commit in repo to use 
 	# you can set this to an alternate commit 
 	# or empty to checkout latest
-	openwrt_commit="90f6af5108c1d81a5c7e78083d82f1035c091bd9"
+	openwrt_commit="dcf11c832a95595e6b919b88d6cd649bd9343a1f"
 	openwrt_abbrev_commit=$( echo "$openwrt_commit" | cut -b 1-7 )
 	
 
@@ -140,61 +141,57 @@ EOF
 
 do_js_compress()
 {
-	echo "Compressing Javascript files..."
-	uglifyjs_arg1="$1"
-	uglifyjs_arg2="$2"
-
+	num_terser_threads=1
+	if [ "$num_build_threads" != "unspecified" ]; then
+		num_terser_threads=$num_build_threads
+	fi
+	echo "Compressing/Mangling JavaScript files ($num_terser_threads threads)..."
+	terser_arg1="$1"
+	terser_arg2="$2"
+	package_dir="$top_dir/package-prepare"
 	rm -rf "$compress_js_dir"
 	mkdir "$compress_js_dir"
-	escaped_package_dir=$(echo "$top_dir/package-prepare/" | sed 's/\//\\\//g' | sed 's/\-/\\-/g' ) ;
-	for jsdir in $(find "${top_dir}/package-prepare" -path "*/www/js") ; do
-		pkg_rel_path=$(echo $jsdir | sed "s/$escaped_package_dir//g");
-		mkdir -p "$compress_js_dir/$pkg_rel_path"
-		cp "$jsdir/"*.js "$compress_js_dir/$pkg_rel_path/"
-		cd "$compress_js_dir/$pkg_rel_path/"
-	 	
-		for jsf in *.js ; do
-	 		if [ -n "$uglifyjs_arg2" ] ; then
-				"$uglifyjs_arg1" "$uglifyjs_arg2" "$jsf" > "$jsf.cmp"
-			else
-				"$uglifyjs_arg1" "$jsf" > "$jsf.cmp"
-			fi
-	 		mv "$jsf.cmp" "$jsf"
-	 	done
-	done
-	cp -r "$compress_js_dir"/* "$top_dir/package-prepare/"
 
+	terser_batch=""
+	cd "$package_dir"
+	for jsf in $(find . -path '*.js' -a -not -path '*/www/i18n/*')
+	do
+		compress_jsf="$compress_js_dir/$jsf"
+		terser_batch="$terser_batch $package_dir/$jsf -o $compress_jsf -c -m"
+		mkdir -p "$(dirname "$compress_jsf")"
+	done
 	cd "$top_dir"
+
+	echo "$terser_batch" | xargs -n 5 -P $num_terser_threads $terser_arg1 $terser_arg2
+	cp -r "$compress_js_dir"/* "$package_dir"
 	echo "Done!"
 }
 
 do_css_compress()
 {
-	echo "Compressing CSS files..."
+	num_uglifycss_threads=1
+	if [ "$num_build_threads" != "unspecified" ]; then
+		num_uglifycss_threads=$num_build_threads
+	fi
+	echo "Compressing CSS files ($num_uglifycss_threads threads)..."
 	uglifycss_arg1="$1"
 	uglifycss_arg2="$2"
-
+	package_dir="$top_dir/package-prepare"
 	rm -rf "$compress_css_dir"
 	mkdir "$compress_css_dir"
-	escaped_package_dir=$(echo "$top_dir/package-prepare/" | sed 's/\//\\\//g' | sed 's/\-/\\-/g' ) ;
-	for cssdir in $(find "${top_dir}/package-prepare" -maxdepth 5 -path "*/www/themes/*") ; do
-		pkg_rel_path=$(echo $cssdir | sed "s/$escaped_package_dir//g");
-		mkdir -p "$compress_css_dir/$pkg_rel_path"
-		cp "$cssdir/"*.css "$compress_css_dir/$pkg_rel_path/"
-		cd "$compress_css_dir/$pkg_rel_path/"
 
-		for cssf in *.css ; do
-			if [ -n "$uglifycss_arg2" ] ; then
-				"$uglifycss_arg1" "$uglifycss_arg2" "$cssf" > "$cssf.cmp"
-			else
-				"$uglifycss_arg1" "$cssf" > "$cssf.cmp"
-			fi
-			mv "$cssf.cmp" "$cssf"
-		done
+	uglifycss_batch=""
+	cd "$package_dir"
+	for cssf in $(find . -path "*.css")
+	do
+		compress_cssf="$compress_css_dir/$cssf"
+		uglifycss_batch="$uglifycss_batch --output $compress_cssf $package_dir/$cssf"
+		mkdir -p "$(dirname "$compress_cssf")"
 	done
-	cp -r "$compress_css_dir"/* "$top_dir/package-prepare/"
-
 	cd "$top_dir"
+
+	echo "$uglifycss_batch" | xargs -n 3 -P $num_uglifycss_threads $uglifycss_arg1 $uglifycss_arg2
+	cp -r "$compress_css_dir"/* "$package_dir"
 	echo "Done!"
 }
 
@@ -250,6 +247,77 @@ distrib_init ()
 	cp -fR "$top_dir/LICENSES" "$top_dir/Distribution/"
 }
 
+loc_or_i18n ()
+{
+	local tgt="$1"
+	local actlang="$2"
+
+	[ ! -z $(which python 2>&1) ] && {
+		#finish internationalization by setting the target language & adding the i18n plugin to the config file
+		#finish localization just deletes the (now unnecessary) language packages from the config file
+		[ "$translation_type" = "localize" ] 	&& "$top_dir/i18n-scripts/finalize_translation.py" 'localize' "$tgt" \
+												|| "$top_dir/i18n-scripts/finalize_translation.py" 'internationalize' "$actlang" "$tgt"
+	} || {
+		#NOTE: localize is not supported because it requires python
+		"$top_dir/i18n-scripts/finalize_tran_ltd.sh" "$tgt-src" "$actlang"
+	}
+}
+
+set_custom_target ()
+{
+	local tgt="$1"
+	local dprof="$2"
+	local custtgt="$3"
+	
+	#pre-set the target in a custom build (default target only)
+	if [ "$tgt" = "custom" ] && [ "$dprof" = "default" ] ; then
+		"$top_dir/dev-utils/set_config_custom_target.sh" "$custtgt" "$top_dir"
+	fi
+}
+
+copy_buildinfo ()
+{
+	local owrt_tgt="$1"
+	local subtgt_arch="$2"
+	local tgt="$3"
+	local dprof="$4"
+	
+	#copy build config info
+	if [ -e "bin/targets/$owrt_tgt/$subtgt_arch/config.buildinfo" ] ; then
+		cp "bin/targets/$owrt_tgt/$subtgt_arch/config.buildinfo" "$top_dir/images/$tgt/$tgt-$dprof.buildinfo"
+	fi
+}
+
+copy_sha256sums ()
+{
+	local owrt_tgt="$1"
+	local subtgt_arch="$2"
+	local tgt="$3"
+	local dprof="$4"
+	
+	#copy sha256sums
+	if [ -e "bin/targets/$owrt_tgt/$subtgt_arch/sha256sums" ] ; then
+		cp "bin/targets/$owrt_tgt/$subtgt_arch/sha256sums" "$top_dir/images/$tgt/$tgt-$dprof.sha256sums"
+		sed -i "s/openwrt/gargoyle_$lower_short_gargoyle_version/g" "$top_dir/images/$tgt/$tgt-$dprof.sha256sums"
+		sed -i "s/config\.buildinfo/$tgt-$dprof.buildinfo/g" "$top_dir/images/$tgt/$tgt-$dprof.sha256sums"
+		sed -i "/version\.buildinfo/d" "$top_dir/images/$tgt/$tgt-$dprof.sha256sums"
+		sed -i "/gargoyle.*\.manifest/d" "$top_dir/images/$tgt/$tgt-$dprof.sha256sums"
+		sed -i "/feeds\.buildinfo/d" "$top_dir/images/$tgt/$tgt-$dprof.sha256sums"
+	fi
+}
+
+bail_on_error ()
+{
+	echo ""
+	echo "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@"
+	echo "@@                                                                      @@"
+	echo "@@  $1  @@"
+	echo "@@                                                                      @@"
+	echo "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@"
+	echo ""
+	exit 1
+}
+
 
 ######################################################################################################
 ## Begin Main Body of Build Script                                                                  ##
@@ -292,6 +360,7 @@ elif [ "$num_build_threads" = "auto" ] ; then
 	num_cores=$(grep -c "^processor" /proc/cpuinfo 2>/dev/null)
 	if [ -z "$num_cores" ] ; then num_cores=1 ; fi
 	num_build_threads=$(($num_cores + 2)) # more threads than cores, since each thread will sometimes block for i/o
+	num_build_thread_str="-j$num_build_threads"
 elif [ "$num_build_threads" -lt 1 ] ; then
 	num_build_threads="1"
 	num_build_thread_str="-j1"
@@ -331,7 +400,8 @@ if [ "$js_compress" = "true" ] || [ "$js_compress" = "TRUE" ] || [ "$js_compress
 
 	cd "$top_dir/minifiers/node_modules/.bin" 2>/dev/null
 
-	npm_test=$( npm -v 2>/dev/null )
+	npm_binary="npm"
+	npm_test=$( "$npm_binary" -v 2>/dev/null )
 	nodeglobal=$npm_test
 	node_binary="node"
 	node_version=$( "$node_binary" -v 2>/dev/null)
@@ -374,16 +444,13 @@ if [ "$js_compress" = "true" ] || [ "$js_compress" = "TRUE" ] || [ "$js_compress
 		if [ ! -e "$top_dir/node/bin/npm" ] ; then
 			rm -rf "$top_dir"/npm
 			cd "$top_dir"
-			git clone git://github.com/npm/npm.git
+			git clone git://github.com/npm/cli.git "$top_dir/npm"
 			cd npm
 			git checkout "$npm_version_tag"
-			export PREFIX="$top_dir/node"
-			./configure
-			make
-			make install
+			npm_binary="$node_binary $top_dir/npm/bin/npm-cli.js"
 		fi
 
-		npm_test=$( npm -v 2>/dev/null )
+		npm_test=$( "$npm_binary" -v 2>/dev/null )
 
 
 	else
@@ -400,31 +467,31 @@ if [ "$js_compress" = "true" ] || [ "$js_compress" = "TRUE" ] || [ "$js_compress
 
 	else
 	
-		uglifyjs_bin="$top_dir/minifiers/node_modules/.bin/uglifyjs"
-		if [ ! -e "$uglifyjs_bin" ] ; then
+		terser_bin="$top_dir/minifiers/node_modules/.bin/terser"
+		if [ ! -e "$terser_bin" ] ; then
 			echo ""
 			echo "**************************************************************************"
-			echo "**  UglifyJS2 is not installed, attempting to install from npm          **"
+			echo "**  Terser is not installed, attempting to install from npm             **"
 			echo "**************************************************************************"
 			echo ""
 		
 			mkdir -p "$top_dir/minifiers/node_modules/.bin"
 
 			cd "$top_dir"
-			npm install uglify-js --prefix minifiers > /dev/null 2>&1
+			${npm_binary} install terser --prefix minifiers > /dev/null 2>&1
 		else
-			echo "uglifyjs ok!"
+			echo "terser ok!"
 		fi
 		cd "$top_dir/minifiers/node_modules/.bin"
-		uglify_test=$( echo 'var abc = 1;' | ${nodeglobal:+$node_binary} "$uglifyjs_bin"  2>/dev/null )
+		uglify_test=$( echo 'var abc = 1;' | ${nodeglobal:+$node_binary} "$terser_bin"  2>/dev/null )
 		if [ "$uglify_test" = 'var abc=1' ] ||  [ "$uglify_test" = 'var abc=1;' ]  ; then
 			js_compress="true"
-			do_js_compress ${nodeglobal:+"$node_binary"} "$uglifyjs_bin"
+			do_js_compress ${nodeglobal:+"$node_binary"} "$terser_bin"
 		else
 			js_compress="false"
 			echo ""
 			echo "**************************************************************************"
-			echo "** WARNING: Cannot compress javascript, uglifyjs could not be installed **"
+			echo "** WARNING: Cannot compress JavaScript, terser could not be installed   **"
 			echo "**************************************************************************"
 			echo ""
 		fi
@@ -438,7 +505,7 @@ if [ "$js_compress" = "true" ] || [ "$js_compress" = "TRUE" ] || [ "$js_compress
 				echo ""
 	
 				cd "$top_dir"
-				npm install uglifycss -q --prefix minifiers > /dev/null 2>&1
+				${npm_binary} install uglifycss -q --prefix minifiers > /dev/null 2>&1
 			else
 				echo "uglifycss ok!"
 			fi
@@ -505,8 +572,6 @@ ln -s "$top_dir/downloaded" "$openwrt_src_dir/dl"
 
 
 for target in $targets ; do
-
-
 	#remove old build files
 	rm -rf "$target-src"
 	if [ -z "$specified_profile" ] ; then
@@ -586,23 +651,6 @@ for target in $targets ; do
 
 	#copy this target configuration to build directory
 	cp "$targets_dir/$target/profiles/$default_profile/config" "$top_dir/${target}-src/.config"
-	
-	#pre-set the target in a custom build (default target only)
-	if [ "$target" = "custom" ] && [ "$default_profile" = "default" ] ; then
-		./dev-utils/set_config_custom_target.sh "$custom_target"
-	fi
-	
-	
-	[ ! -z $(which python 2>&1) ] && {
-		#finish internationalization by setting the target language & adding the i18n plugin to the config file
-		#finish localization just deletes the (now unnecessary) language packages from the config file
-		[ "$translation_type" = "localize" ] 	&& "$top_dir/i18n-scripts/finalize_translation.py" 'localize' "$target" \
-												|| "$top_dir/i18n-scripts/finalize_translation.py" 'internationalize' "$active_lang" "$target"
-	} || {
-		#NOTE: localize is not supported because it requires python
-		"$top_dir/i18n-scripts/finalize_tran_ltd.sh" "$target-src" "$active_lang"
-	}
-
 
 	#if target is custom, checkout optional packages and copy all that don't 
 	#share names with gargoyle-specific packages to build directory
@@ -631,9 +679,7 @@ for target in $targets ; do
 		fi
 		other_packages=$(ls "$openwrt_package_dir" )
 		for other in $other_packages ; do
-			if [ ! -d "$target-src/package/$other" ] ; then
-				cp -r "$openwrt_package_dir/$other" $target-src/package
-			fi
+			cp -r "$openwrt_package_dir/$other" $target-src/package
 		done
 	fi
 
@@ -651,48 +697,70 @@ for target in $targets ; do
 	rm .ver
 	mv .vermake "$top_dir/$target-src/package/gargoyle/Makefile"
 
-	#make prerequisites (mostly just mkhash we are interested in)
-	make prereq >/dev/null 2>&1
-	if [ -x "$top_dir/$target-src/staging_dir/host/bin/mkhash" ] ; then
-		export PATH=$PATH:"$top_dir/$target-src/staging_dir/host/bin"
-	else
-		echo "Couldn't find mkhash"
-	fi
-
 	#build, if verbosity is 0 dump most output to /dev/null, otherwise dump everything
 	if [ "$verbosity" = "0" ] ; then
-		scripts/patch-kernel.sh . "$patches_dir/" >/dev/null 2>&1
-		scripts/patch-kernel.sh . "$targets_dir/$target/patches/" >/dev/null 2>&1
-		if [ "$target" = "custom" ] ; then
-			sh $netfilter_patch_script . "$top_dir/netfilter-match-modules" 1 0 >/dev/null 2>&1
-			make menuconfig
-			sh $netfilter_patch_script . "$top_dir/netfilter-match-modules" 0 1 >/dev/null 2>&1
-		else
-			sh $netfilter_patch_script . "$top_dir/netfilter-match-modules" 1 1 >/dev/null 2>&1
+		cp -r "$files_dir/." .
+		cp -r "$targets_dir/$target/files/." .
+		scripts/patch-kernel.sh . "$patches_dir/" >/dev/null 2>&1 || bail_on_error "generic patch failure"
+		if [ -d "$targets_dir/$target/patches" ] ; then
+			scripts/patch-kernel.sh . "$targets_dir/$target/patches/" >/dev/null 2>&1 || bail_on_error "$target patch failure"
 		fi
-
+		
+		sh $netfilter_patch_script . "$top_dir/netfilter-match-modules" 1 0 >/dev/null 2>&1
+		make defconfig
+		set_custom_target "$target" "$default_profile" "$custom_target"
+		loc_or_i18n "$target" "$active_lang"
+		if [ "$target" = "custom" ] ; then
+			make menuconfig
+		fi
+		sh $netfilter_patch_script . "$top_dir/netfilter-match-modules" 0 1 >/dev/null 2>&1
 	
 		openwrt_target=$(get_target_from_config "./.config")
 		create_gargoyle_banner "$openwrt_target" "$profile_name" "$build_date" "$short_gargoyle_version" "$gargoyle_git_revision" "$branch_name" "$openwrt_abbrev_commit" "package/base-files/files/etc/banner" "."
+		#Set gargoyle official version parameter in gargoyle package
+		echo "OFFICIAL_VERSION:=$full_gargoyle_version" > .ver
+		echo "GARGOYLE_DISTRIB_RELEASE:=$short_gargoyle_version" >> .ver
+		echo "GARGOYLE_DISTRIB_REVISION:=$gargoyle_git_revision" >> .ver
+		echo "GARGOYLE_DISTRIB_TARGET:=$openwrt_target" >> .ver
+		echo "GARGOYLE_DISTRIB_PROFILE:=$profile_name" >> .ver
+		echo "GARGOYLE_DISTRIB_DESCRIPTION:=$full_gargoyle_version" >> .ver
+		cat .ver "$package_dir/gargoyle/Makefile" >.vermake
+		rm .ver
+		mv .vermake "$top_dir/$target-src/package/gargoyle/Makefile"
 
 		make $num_build_thread_str GARGOYLE_VERSION="$numeric_gargoyle_version" GARGOYLE_VERSION_NAME="$lower_short_gargoyle_version" GARGOYLE_PROFILE="$default_profile"
 
 	else
-		scripts/patch-kernel.sh . "$patches_dir/" 
-		scripts/patch-kernel.sh . "$targets_dir/$target/patches/" 
-		if [ "$target" = "custom" ] ; then
-			sh $netfilter_patch_script . "$top_dir/netfilter-match-modules" 1 0  
-			make menuconfig
-			sh $netfilter_patch_script . "$top_dir/netfilter-match-modules" 0 1  
-		else
-			sh $netfilter_patch_script . "$top_dir/netfilter-match-modules" 1 1 
+		cp -r "$files_dir/." .
+		cp -r "$targets_dir/$target/files/." .
+		scripts/patch-kernel.sh . "$patches_dir/" || bail_on_error "generic patch failure"
+		if [ -d "$targets_dir/$target/patches" ] ; then
+			scripts/patch-kernel.sh . "$targets_dir/$target/patches/" || bail_on_error "$target patch failure"
 		fi
 
+		sh $netfilter_patch_script . "$top_dir/netfilter-match-modules" 1 0
+		make defconfig
+		set_custom_target "$target" "$default_profile" "$custom_target"
+		loc_or_i18n "$target" "$active_lang"
+		if [ "$target" = "custom" ] ; then
+			make menuconfig
+		fi
+		sh $netfilter_patch_script . "$top_dir/netfilter-match-modules" 0 1
 
 		openwrt_target=$(get_target_from_config "./.config")
 		create_gargoyle_banner "$openwrt_target" "$profile_name" "$build_date" "$short_gargoyle_version" "$gargoyle_git_revision" "$branch_name" "$openwrt_abbrev_commit" "package/base-files/files/etc/banner" "."
+		#Set gargoyle official version parameter in gargoyle package
+		echo "OFFICIAL_VERSION:=$full_gargoyle_version" > .ver
+		echo "GARGOYLE_DISTRIB_RELEASE:=$short_gargoyle_version" >> .ver
+		echo "GARGOYLE_DISTRIB_REVISION:=$gargoyle_git_revision" >> .ver
+		echo "GARGOYLE_DISTRIB_TARGET:=$openwrt_target" >> .ver
+		echo "GARGOYLE_DISTRIB_PROFILE:=$profile_name" >> .ver
+		echo "GARGOYLE_DISTRIB_DESCRIPTION:=$full_gargoyle_version" >> .ver
+		cat .ver "$package_dir/gargoyle/Makefile" >.vermake
+		rm .ver
+		mv .vermake "$top_dir/$target-src/package/gargoyle/Makefile"
 
-		make $num_build_thread_str V=99 GARGOYLE_VERSION="$numeric_gargoyle_version" GARGOYLE_VERSION_NAME="$lower_short_gargoyle_version" GARGOYLE_PROFILE="$default_profile"
+		make $num_build_thread_str V=s GARGOYLE_VERSION="$numeric_gargoyle_version" GARGOYLE_VERSION_NAME="$lower_short_gargoyle_version" GARGOYLE_PROFILE="$default_profile"
 
 	fi
 	
@@ -710,10 +778,10 @@ for target in $targets ; do
 	index_files=$(find "$package_base_dir" -name "Packa*")
 	if [ -n "$package_files" ] && [ -n "$index_files" ] ; then
 		for pf in $package_files ; do
-			cp "$pf" "$top_dir/built/$target/$default_profile/"
+			cp "$pf" "$top_dir/built/$target/$profile_name/"
 		done
 		for inf in $index_files ; do
-			cp "$inf" "$top_dir/built/$target/$default_profile/"
+			cp "$inf" "$top_dir/built/$target/$profile_name/"
 		done
 	fi
 	#copy build specific packages to build/target specific directory
@@ -725,10 +793,10 @@ for target in $targets ; do
 	index_files=$(find "$package_base_dir" -name "Packa*")
 	if [ -n "$package_files" ] && [ -n "$index_files" ] ; then
 		for pf in $package_files ; do
-			cp "$pf" "$top_dir/built/$target/$default_profile"_kernelspecific/
+			cp "$pf" "$top_dir/built/$target/$profile_name"_kernelspecific/
 		done
 		for inf in $index_files ; do
-			cp "$inf" "$top_dir/built/$target/$default_profile"_kernelspecific/
+			cp "$inf" "$top_dir/built/$target/$profile_name"_kernelspecific/
 		done
 	fi
 	
@@ -762,6 +830,9 @@ for target in $targets ; do
 			done
 		done
 	fi
+
+	copy_buildinfo "$openwrt_target" "$subtarget_arch" "$target" "$default_profile"
+	copy_sha256sums "$openwrt_target" "$subtarget_arch" "$target" "$default_profile"
 
 	#if we didn't build anything, die horribly
 	if [ -z "$image_files" ] ; then
@@ -797,17 +868,8 @@ for target in $targets ; do
 			done
 		done
 		
-		
-		[ ! -z $(which python 2>&1) ] && {
-			#finish internationalization by setting the target language & adding the i18n plugin to the config file
-			#finish localization just deletes the (now unnecessary) language packages from the config file
-			[ "$translation_type" = "localize" ] 	&& "$top_dir/i18n-scripts/finalize_translation.py" 'localize' "$target" \
-													|| "$top_dir/i18n-scripts/finalize_translation.py" 'internationalize' "$active_lang" "$target"
-		} || {
-			#NOTE: localize is not supported because it requires python
-			"$top_dir/i18n-scripts/finalize_tran_ltd.sh" "$target-src" "$active_lang"
-		}
-		
+		make defconfig
+		loc_or_i18n "$target" "$active_lang"
 		
 		openwrt_target=$(get_target_from_config "./.config")
 		create_gargoyle_banner "$openwrt_target" "$profile_name" "$build_date" "$short_gargoyle_version" "$gargoyle_git_revision" "$branch_name" "$openwrt_abbrev_commit" "package/base-files/files/etc/banner" "."
@@ -825,10 +887,9 @@ for target in $targets ; do
 
 
 		if [ "$verbosity" = "0" ] ; then
-			
 			make $num_build_thread_str  GARGOYLE_VERSION="$numeric_gargoyle_version" GARGOYLE_VERSION_NAME="$lower_short_gargoyle_version" GARGOYLE_PROFILE="$profile_name"
 		else
-			make $num_build_thread_str V=99 GARGOYLE_VERSION="$numeric_gargoyle_version" GARGOYLE_VERSION_NAME="$lower_short_gargoyle_version" GARGOYLE_PROFILE="$profile_name"
+			make $num_build_thread_str V=s GARGOYLE_VERSION="$numeric_gargoyle_version" GARGOYLE_VERSION_NAME="$lower_short_gargoyle_version" GARGOYLE_PROFILE="$profile_name"
 		fi
 
 		#if we didn't build anything, die horribly
@@ -867,7 +928,8 @@ for target in $targets ; do
 			done
 		fi
 
-
+		copy_buildinfo "$openwrt_target" "$subtarget_arch" "$target" "$profile_name"
+		copy_sha256sums "$openwrt_target" "$subtarget_arch" "$target" "$profile_name"
 	
 		if [ "$distribution" = "true" ] ; then
 			mkdir -p "$top_dir/Distribution/Images/$target-$profile_name"

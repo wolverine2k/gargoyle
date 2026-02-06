@@ -7,11 +7,13 @@ hostsStr.RefreshR="Частота обновления";
 hostsStr.RInfo="Указывает, как часто обновляется информация на этой странице";
 hostsStr.CurrLeases="Присвоенные DHCP адреса";
 hostsStr.ConWifiHosts="Беспроводные подключения";
+hostsStr.ConClientWifi="Подключения к WiFi в роли клиента";
 hostsStr.ActiveHosts="Активные подключения";
 
 //javascript
 hostsStr.HostIP="IP-адрес";
 hostsStr.HostMAC="MAC-адрес";
+hostsStr.HostDUID="DUID";
 hostsStr.LeaseExp="Аренда заканчивается";
 hostsStr.Bitrate="Скорость";
 hostsStr.Signal="Сигнал";

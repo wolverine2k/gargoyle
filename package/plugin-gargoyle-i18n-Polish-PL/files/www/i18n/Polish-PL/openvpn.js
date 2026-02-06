@@ -27,6 +27,9 @@ ovpnS.CredMC="Identyczne dla wielu klientów";
 ovpnS.CUse="Klienty używają VPN do";
 ovpnS.ATrff="Całego ruchu internetowego";
 ovpnS.HTrff="Dostępu tylko do zasobów lokalnych";
+ovpnS.SASnet="Rozgłaszane dodatkowe podsieci serwera";
+ovpnS.SASnetAdd="Dodawanie dodatkowej podsieci serwera";
+ovpnS.SASnetHlp="Poinformuj klientów o dodatkowych podsieciach, dla których serwer pełni rolę bramy. Dostępne tylko wtedy, gdy dozwolony jest dostęp do podsieci LAN.";
 ovpnS.OSAC="Serwer OpenVPN: klienty";
 ovpnS.CClnt="Obecna konfiguracja klientów";
 ovpnS.ZipCred="Po wygenerowaniu konfiguracji pobierz archiwum zip zawierające wymagane poświadczenia, aby móc je następnie rozpakować u klienta w katalogu z konfiguracją OpenVPN";
@@ -44,6 +47,7 @@ ovpnS.CfgMan="Ręczna konfiguracja klienta";
 ovpnS.UpFmt="Format";
 ovpnS.SZipF="Plik z archiwum konfiguracji";
 ovpnS.CfgF="Pojedyncze pliki konfiguracyjne";
+ovpnS.CfgFOvpn="Pojedynczy plik konfiguracyjny (.ovpn)";
 ovpnS.ZipF="Plik archiwum (zip, tgz)";
 ovpnS.OCfgF="Plik konfiguracyjny OpenVPN";
 ovpnS.CACF="Plik certyfikatu CA";
@@ -51,6 +55,10 @@ ovpnS.CCertF="Plik certyfikatu klienta";
 ovpnS.CKeyF="Plik klucza klienta";
 ovpnS.TAKeyF="Plik klucza TLS-Auth";
 ovpnS.UseTAK="Użyj klucza TLS-Auth";
+ovpnS.UseAUP="Użyj autoryzacji nazwa użytkownika/hasło";
+ovpnS.AUPUser="Nazwa użytkownika";
+ovpnS.AUPPass="Hasło";
+ovpnS.rvel="pokaż";
 ovpnS.OSrvAddr="Adres serwera OpenVPN";
 ovpnS.OSrvPrt="Port serwera OpenVPN";
 ovpnS.Othr="Inny";
@@ -80,7 +88,7 @@ ovpnS.OPrtErr="Port serwera musi być z zakresu 1-65535";
 ovpnS.GTAPErr="Gargoyle nie wspiera konfiguracji typu TAP OpenVPN";
 ovpnS.RunC="Uruchomiony, połączony";
 ovpnS.RunNC="Uruchomiony, niepołączony";
-ovpnS.RunNot="Nie uruchomiony";
+ovpnS.RunNot="Nieuruchomiony";
 ovpnS.IntIP="Wewnętrzne IP\n(obsługiwana podsieć)\nAdres bramy";
 ovpnS.CfgCredFM="Poświadczenia\ni konfiguracja\n(wiele plików)";
 ovpnS.CfgCredFS="Poświadczenia\ni konfiguracja\n(jeden plik)";
@@ -92,9 +100,14 @@ ovpnS.ClntIntIP="Podany adres IP klienta";
 ovpnS.OSubErr="nie jest z zakresu podsieci OpenVPN";
 ovpnS.AddCErr="Nie można dodać konfiguracji klienta.";
 ovpnS.UpCErr="Nie można zaktualizować konfiguracji klienta.";
+ovpnS.AddESnetErr="Nie można dodać dodatkowej podsieci.";
+ovpnS.SubDup="Wykryto duplikat podsieci, zdefiniowany już jako podsieć OpenVPN, podsieć klienta lub dodatkowa podsieć serwera.";
 
 //openvpn_allowed_client_edit.sh
 ovpnS.EditOCS="Edycja ustawień klienta OpenVPN";
+
+//openvpn_additional_route_template.sh
+ovpnS.EditES="Edycja dodatkowej podsieci serwera OpenVPN";
 
 //openvpn_upload_client.sh (handled by shell scripts)
 ovpnS.uc_CA_f="Nie można znaleźć pliku CA";

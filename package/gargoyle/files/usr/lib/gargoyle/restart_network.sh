@@ -15,6 +15,7 @@
 # However, if vlan is active it can be problematic to take
 # the switch interface down, so just take down the sub-interfaces
 
+. /lib/functions/network.sh
 . /usr/lib/gargoyle/libgargoylehelper.sh
 
 backup_quotas >/dev/null 2>&1
@@ -26,6 +27,7 @@ backup_quotas >/dev/null 2>&1
 /etc/init.d/miniupnpd stop >/dev/null 2>&1
 /etc/init.d/firewall stop >/dev/null 2>&1 
 /etc/init.d/dnsmasq stop >/dev/null 2>&1 
+/etc/init.d/odhcpd stop >/dev/null 2>&1
 
 #ugly, ugly hack... marvell switch in fon+ and fon2
 #won't come up properly if switch (which is necessary in dir300)
@@ -65,10 +67,11 @@ sleep 1
 
 service_start_if_enabled miniupnpd
 service_start_if_enabled dnsmasq
+service_start_if_enabled odhcpd
 service_start_if_enabled webmon_gargoyle
 
-lan_gateway=$(uci -P /var/state get network.lan.gateway)
-wan_gateway=$(uci -P /var/state get network.wan.gateway)
+network_get_gateway lan_gateway lan
+network_get_gateway wan_gateway wan
 if [ -n "$lan_gateway" ] ; then
 	arping -c 2 -I br-lan $lan_gateway
 	ping -c 2 $lan_gateway

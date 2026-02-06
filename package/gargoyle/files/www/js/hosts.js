@@ -74,10 +74,22 @@ function resetVariables()
 		}
 		tableContainer.appendChild(table);
         	reregisterTableSort('lease_table', 's', 'p', 's', 's');
+
+		document.getElementById("dhcp6_data").style.display="block";
+		var columnNames=[UI.HsNm, hostsStr.HostIP, hostsStr.HostDUID, hostsStr.LeaseExp];
+		var table = createTable(columnNames, parseDhcp6(dhcp6LeaseLines), "lease6_table", false, false);
+		var tableContainer = document.getElementById('lease6_table_container');
+		if(tableContainer.firstChild != null)
+		{
+			tableContainer.removeChild(tableContainer.firstChild);
+		}
+		tableContainer.appendChild(table);
+        	reregisterTableSort('lease6_table', 's', 'p', 's', 's');
 	}
 	else
 	{
 		document.getElementById("dhcp_data").style.display="none";
+		document.getElementById("dhcp6_data").style.display="none";
 	}
 
 	var arpHash = parseArp(arpLines, dhcpLeaseLines);
@@ -131,6 +143,44 @@ function resetVariables()
 		document.getElementById("client_wifi_data").style.display="none";
 	}
 
+	remoteAPs = [];
+	if(usteerRemotes)
+	{
+		var usteerRemotesJSON = JSON.parse(usteerRemotes);
+		Object.keys(usteerRemotesJSON).forEach(function(remotevar) {
+			parseusteerRemote(remotevar,usteerRemotesJSON);
+		});
+
+		var usteerClientsJSON = JSON.parse(usteerClients);
+		Object.keys(usteerClientsJSON).forEach(function(client) {
+			parseusteerClient(client,usteerClientsJSON,arpHash);
+		});
+
+		var wifiremotedataContainer = byId('wifi_remote_data');
+		while(wifiremotedataContainer.firstChild != null)
+		{
+			wifiremotedataContainer.removeChild(wifiremotedataContainer.firstChild);
+		}
+		Object.keys(remoteAPs).forEach(function(remoteAP) {
+			var tablediv = document.createElement('div');
+			tablediv.id = 'wifi_remote_' + remoteAP + '_data';
+			tablediv.class = 'table-responsive';
+			var columnNames=[UI.HsNm, hostsStr.HostIP, hostsStr.HostMAC, hostsStr.Band, hostsStr.Signal ];
+			var tableformatdata = remoteAPs[remoteAP]['clients'].map(function(client) {
+				return remoteAPClientsToTableFormat(client,remoteAPs[remoteAP]['band']);
+			});
+			var table = createTable(columnNames, tableformatdata, 'wifi_remote_' + remoteAP + '_data_table', false, false);
+			tablediv.appendChild(table);
+			var labelEl = document.createElement('label');
+			labelEl.class = 'col-xs-12';
+			labelEl.style = 'text-decoration:underline';
+			labelEl.for = 'wifi_remote_' + remoteAP + '_data_table';
+			labelEl.innerText = hostsStr.Remote + ' AP: ' + remoteAPs[remoteAP]['ssid'] + ' (' + remoteAPs[remoteAP]['ip'] + ')';
+			wifiremotedataContainer.appendChild(labelEl);
+			wifiremotedataContainer.appendChild(tablediv);
+		});
+	}
+
 	var columnNames=[UI.HsNm, hostsStr.HostIP, hostsStr.HostMAC, hostsStr.ActiveConx, hostsStr.RecentConx, hostsStr.UDPConx];
 	var table = createTable(columnNames, parseConntrack(arpHash, currentWanIp, conntrackLines), "active_table", false, false);
 	var tableContainer = document.getElementById('active_table_container');
@@ -142,9 +192,70 @@ function resetVariables()
 	reregisterTableSort('active_table', 's', 'p', 's', 'i', 'i', 'i');
 }
 
+function parseusteerRemote(remotevar,usteerRemotesJSON)
+{
+	var tmpRemoteAP = [];
+	tmpRemoteAP['ip'] = remotevar.split("#")[0];
+	tmpRemoteAP['ap'] = remotevar.split("#")[1];
+	tmpRemoteAP['band'] = usteerRemotesJSON[remotevar]['freq'].toString().substring(0,1) == 2 ? '2.4GHz' : '5GHz';
+	tmpRemoteAP['ssid'] = usteerRemotesJSON[remotevar]['rrm_nr'][1];
+	tmpRemoteAP['clients'] = [];
+	remoteAPs[remotevar] = tmpRemoteAP;
+}
+
+function parseusteerVisitedAP(visitedAP,visitedAPs,client,arpHash)
+{
+	if(visitedAP.match(/#/))
+	{
+		// # would indicate a remote and not local, so lets do it
+		if(visitedAPs[visitedAP]['connected'])
+		{
+			// Only report clients that are connected, this isn't a hearing map
+			var tmpClient = [];
+			tmpClient['signal'] = visitedAPs[visitedAP]['signal'];
+			tmpClient['ip'] = arpHash[client.toUpperCase()] == null ? UI.unk : arpHash[client.toUpperCase()];
+			tmpClient['hostname'] = getHostname(tmpClient['ip']);
+			tmpClient['mac'] = client.toUpperCase();
+			remoteAPs[visitedAP]['clients'].push(tmpClient);
+		}
+	}
+}
+
+function parseusteerClient(client,usteerClientsJSON,arpHash)
+{
+	var visitedAPs = usteerClientsJSON[client];
+	Object.keys(visitedAPs).forEach(function(visitedAP) {
+		parseusteerVisitedAP(visitedAP,visitedAPs,client,arpHash);
+	});
+}
+
+function signalToSpan(sig)
+{
+	// Some drivers pass through quality rather than signal level. Convert this back. Also make sure it fits within the standard max/min range
+	sig = sig > 0 ? sig - 110 : sig;
+	sig = sig > -40 ? -40 : sig;
+	sig = sig < -110 ? -110 : sig;
+	var toHexTwo = function(num) { var ret = parseInt(num).toString(16).toUpperCase(); ret= ret.length < 2 ? "0" + ret : ret.substr(0,2); return ret; }
+	var color = sig < -80  ? "#AA0000" : "";
+	color = sig >= -80 && sig < -70 ? "#AA" + toHexTwo(170*((sig+80)/10.0)) + "00" : color;
+	color = sig >= -70 && sig < -60 ? "#" + toHexTwo(170-(170*(sig+70)/10.0)) + "AA00" : color;
+	color = sig >= -60 ? "#00AA00" : color;
+	var sigSpan = document.createElement("span");
+	sigSpan.appendChild(document.createTextNode(sig + " dBm"));
+	sigSpan.style.color = color;
+	return sigSpan;
+}
+
+function remoteAPClientsToTableFormat(client,band)
+{
+	var sig = client['signal'];
+	var sigSpan = signalToSpan(sig);
+	return [client['hostname'],client['ip'],client['mac'],band,sigSpan];
+}
 
 function getHostname(ip)
 {
+	ip = validateIP6(ip) == 0 ? ip6_canonical(ip) : ip;
 	var hostname = ipToHostname[ip] == null ? "("+UI.unk+")" : ipToHostname[ip];
 	hostname = hostname.length < 25 ? hostname : hostname.substr(0,22)+"...";
 	return hostname;
@@ -180,20 +291,64 @@ function parseDhcp(leases)
 	return dhcpTableData;
 }
 
+function parseDhcp6(leases)
+{
+	//# br-lan DUID ?? HostName Expiry Suffix NetMask Address1 [, Address2, Address3...]
+	var dhcpTableData = [];
+	var lineIndex=0;
+	for(lineIndex=0; lineIndex < leases.length; lineIndex++)
+	{
+		var leaseLine = leases[lineIndex];
+		var splitLease = leaseLine.split(/[\t ]+/);
+		var ip = [];
+		for(var x = 8; x < splitLease.length; x++)
+		{
+			ip.push(ip6_splitmask(splitLease[x]).address);
+		}
+		var ipTxt = ip.join("\n");
+		var hostname = getHostname(ip[0]);
+		var duid = splitLease[2];
+
+		var expTime = splitLease[5];
+		var exp = "";
+		if(expTime == "-1")
+		{
+			exp = "N/A";
+		}
+		else
+		{
+			var seconds = expTime - currentTime;
+			var expHours = Math.floor(seconds/(60*60));
+			var expMinutes = Math.floor((seconds-(expHours*60*60))/(60));
+			if(expMinutes < 10)
+			{
+				expMinutes = "0" + expMinutes;
+			}
+			exp = expHours + "h " + expMinutes + "m";
+		}
+
+		dhcpTableData.push( [hostname, ipTxt, duid, exp ] );
+	}
+	sort2dStrArr(dhcpTableData, 1);
+	return dhcpTableData;
+}
+
 function parseArp(arpLines, leaseLines)
 {
 	var arpHash = [];
 
-	arpLines.shift(); //skip header
 	var lineIndex = 0;
 	for(lineIndex=0; lineIndex < arpLines.length; lineIndex++)
 	{
 		var nextLine = arpLines[lineIndex];
 		var splitLine = nextLine.split(/[\t ]+/);
-		var mac = splitLine[3].toUpperCase();
-		var ip = splitLine[0];
-		arpHash[ mac ] = ip;
-		arpHash[ ip  ] = mac;
+		if(splitLine.length >= 5)
+		{
+			var mac = splitLine[4].toUpperCase();
+			var ip = splitLine[0];
+			arpHash[ mac ] = ip;
+			arpHash[ ip  ] = mac;
+		}
 	}
 
 
@@ -258,16 +413,8 @@ function parseWifi(arpHash, wirelessDriver, lines, apsta)
 		mbs[0] = (mbs[0]).toUpperCase();
 		mbs[1] = mbs[1] + " Mbps";
 
-		var toHexTwo = function(num) { var ret = parseInt(num).toString(16).toUpperCase(); ret= ret.length < 2 ? "0" + ret : ret.substr(0,2); return ret; }
-
 		var sig = parseInt(mbs[2]);
-		var color = sig < -80  ? "#AA0000" : "";
-		color = sig >= -80 && sig < -70 ? "#AA" + toHexTwo(170*((sig+80)/10.0)) + "00" : color;
-		color = sig >= -70 && sig < -60 ? "#" + toHexTwo(170-(170*(sig+70)/10.0)) + "AA00" : color;
-		color = sig >= -60 ? "#00AA00" : color;
-		var sigSpan = document.createElement("span");
-		sigSpan.appendChild(document.createTextNode(mbs[2] + " dBm"));
-		sigSpan.style.color = color;
+		var sigSpan = signalToSpan(sig);
 		mbs[2] = sigSpan;
 
 		if(apsta == "AP")
@@ -330,12 +477,19 @@ function parseConntrack(arpHash, currentWanIp, lines)
 		var srcIpPart = splitLine[1];
 		var splitSrcIp = srcIpPart.split(/[\t ]+/);
 		var srcIp = splitSrcIp[0];
+		if(isIPv6(srcIp))
+		{
+			srcIp = ip6_canonical(srcIp);
+		}
 
 		splitLine = nextLine.split(/dst=/); //we want FIRST dst definition
 		var dstIpPart = splitLine[1];
 		var splitDstIp = dstIpPart.split(/[\t ]+/);
 		var dstIp = splitDstIp[0];
-
+		if(isIPv6(dstIp))
+		{
+			dstIp = ip6_canonical(dstIp);
+		}
 
 
 		splitLine=nextLine.split(/[\t ]+/);
@@ -354,7 +508,7 @@ function parseConntrack(arpHash, currentWanIp, lines)
 
 		//for some reason I'm seeing src ips of 0.0.0.0 -- WTF???
 		//exclude anything starting at router, or ending at external wan ip, since this is probably a connection to router from outside
-		if(ipHash[srcIp] == null && srcIp != currentWanIp && srcIp != currentLanIp && dstIp != currentWanIp && srcIp != "0.0.0.0")
+		if(ipHash[srcIp] == null && srcIp != currentWanIp && currentWanIp6.indexOf(ip6_canonical(srcIp)) < 0 && srcIp != currentLanIp && currentLanIp6.indexOf(ip6_canonical(srcIp)) < 0 && dstIp != currentWanIp && currentWanIp6.indexOf(ip6_canonical(dstIp)) < 0 && srcIp != "0.0.0.0" && srcIp.match(/^fe80:/) == null && dstIp.match(/^fe80:/) == null)
 		{
 			ipList.push(srcIp);
 			ipHash[srcIp] = 1;

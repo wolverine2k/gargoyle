@@ -13,7 +13,7 @@
 <!--
 <%
 	upnp_config_enabled=$(uci get upnpd.config.enabled 2>/dev/null)
-	have_miniupnpd=$(opkg list-installed | grep "miniupnpd" 2>/dev/null)
+	have_miniupnpd=$(gpkg list-installed miniupnpd-nftables 2>&1)
 	if [ -h /etc/rc.d/S94miniupnpd ] && [ -n "$upnp_config_enabled" ] && [ "$upnp_config_enabled" != "0" ] ; then
 		echo "var upnpdEnabled = true;"
 	else
@@ -76,6 +76,52 @@
 </div>
 
 <div class="row">
+	<div class="col-lg-6">
+		<div class="panel panel-default">
+			<div class="panel-heading">
+				<h3 class="panel-title"><%~ port.POISect %></h3>
+			</div>
+
+			<div class="panel-body">
+				<div id="porto_add_heading_container" class="row form-group">
+					<label class="col-xs-12" id="porto_add_heading_label" style="text-decoration:underline"><%~ OpeIPort %>:</label>
+				</div>
+
+				<div class="row form-group">
+					<div id="porto_add_container" class="col-xs-12">
+						<button type="button" id="addo_button" class="btn btn-default btn-add" onclick="addPortOModal(true)"><%~ Add %></button>
+					</div>
+				</div>
+
+				<div id="porto_table_container" class="col-xs-12 table-responsive"></div>
+			</div>
+		</div>
+	</div>
+
+	<div class="col-lg-6">
+		<div class="panel panel-default">
+			<div class="panel-heading">
+				<h3 class="panel-title"><%~ port.PORSect %></h3>
+			</div>
+
+			<div class="panel-body">
+				<div id="portorange_add_heading_container" class="row form-group">
+					<label class="col-xs-12" id="portorange_add_heading_label" style="text-decoration:underline"><%~ OpeRPort %>:</label>
+				</div>
+
+				<div class="row form-group">
+					<div id="portorange_add_container" class="col-xs-12">
+						<button type="button" id="addor_button" class="btn btn-default btn-add" onclick="addPortOModal(false)"><%~ Add %></button>
+					</div>
+				</div>
+
+				<div id="portorange_table_container" class="col-xs-12 table-responsive"></div>
+			</div>
+		</div>
+	</div>
+</div>
+
+<div class="row">
 	<div id="upnp_fieldset" class="col-lg-6">
 		<div class="panel panel-default">
 			<div class="panel-heading">
@@ -104,7 +150,7 @@
 				<div id="upnp_up_container" class="row form-group">
 					<label class="col-xs-5" for="upnp_up" id="upnp_up_label"><%~ USpd %>:</label>
 					<span class="col-xs-7">
-						<input type="text" id="upnp_up" class="form-control" onkeyup="proofreadNumeric(this)" size="5" maxlength="5" />
+						<input type="text" id="upnp_up" class="form-control" oninput="proofreadNumeric(this)" size="5" maxlength="5" />
 						<em><%~ KBs %></em>
 					</span>
 				</div>
@@ -112,14 +158,16 @@
 				<div id="upnp_down_container" class="row form-group">
 					<label class="col-xs-5" for="upnp_down" id="upnp_down_label"><%~ DSpd %>:</label>
 					<span class="col-xs-7">
-						<input type="text" id="upnp_down" class="form-control" onkeyup="proofreadNumeric(this)" size="5" maxlength="5" />
+						<input type="text" id="upnp_down" class="form-control" oninput="proofreadNumeric(this)" size="5" maxlength="5" />
 						<em><%~ KBs %></em>
 					</span>
 				</div>
 
 				<div id="upnp_help" class="row form-group">
-					<span class="col-xs-12"><a id="upnp_help_ref" onclick="setDescriptionVisibility('upnp_help')" href="#upnp_help"><%~ Hide %></a></span>
-					<span class="col-xs-12" id="upnp_help_txt"><%~ UPHelp %></span>
+					<span class="col-xs-12"><a id="upnp_help_ref" href="javascript:setDescriptionVisibility('upnp_help')"><%~ Hide %></a></span>
+					<span class="col-xs-12" id="upnp_help_txt">
+						<p><%~ UPHelp %></p>
+					</span>
 				</div>
 			</div>
 		</div>
@@ -141,7 +189,7 @@
 
 				<div id="dmz_ip_container" class="row form-group">
 					<label class="col-xs-5" for="dmz_ip" id="dmz_ip_label"><%~ DMZIP %>:</label>
-					<span class="col-xs-7"><input type="text" class="form-control" name="dmz_ip" id="dmz_ip" onkeyup="proofreadIp(this)" size="20" maxlength="15" /></span>
+					<span class="col-xs-7"><input type="text" class="form-control" name="dmz_ip" id="dmz_ip" oninput="proofreadIp(this)" size="20" maxlength="15" /></span>
 				</div>
 			</div>
 		</div>
@@ -178,6 +226,36 @@
 				<%in templates/multi_forward_template %>
 			</div>
 			<div class="modal-footer" id="multi_forward_modal_button_container">
+			</div>
+		</div>
+	</div>
+</div>
+
+<div class="modal fade" tabindex="-1" role="dialog" id="single_open_modal" aria-hidden="true" aria-labelledby="single_open_modal_title">
+	<div class="modal-dialog" role="document">
+		<div class="modal-content">
+			<div class="modal-header">
+				<h3 id="single_open_modal_title" class="panel-title"><%~ OpeIPort %></h3>
+			</div>
+			<div class="modal-body">
+				<%in templates/single_open_template %>
+			</div>
+			<div class="modal-footer" id="single_open_modal_button_container">
+			</div>
+		</div>
+	</div>
+</div>
+
+<div class="modal fade" tabindex="-1" role="dialog" id="multi_open_modal" aria-hidden="true" aria-labelledby="multi_open_modal_title">
+	<div class="modal-dialog" role="document">
+		<div class="modal-content">
+			<div class="modal-header">
+				<h3 id="multi_open_modal_title" class="panel-title"><%~ OpeIPort %></h3>
+			</div>
+			<div class="modal-body">
+				<%in templates/multi_open_template %>
+			</div>
+			<div class="modal-footer" id="multi_open_modal_button_container">
 			</div>
 		</div>
 	</div>

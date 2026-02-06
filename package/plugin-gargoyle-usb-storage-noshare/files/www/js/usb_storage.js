@@ -172,14 +172,14 @@ function saveChanges()
 
 
 	//update shares
-	uci.removeAllSectionsOfType("samba",  "samba")
-	uci.removeAllSectionsOfType("samba",  "sambashare")
+	uci.removeAllSectionsOfType(sambapkg,  "samba")
+	uci.removeAllSectionsOfType(sambapkg,  "sambashare")
 	uci.removeAllSectionsOfType("vsftpd", "vsftpd")
 	uci.removeAllSectionsOfType("vsftpd", "share")
 	uci.removeAllSectionsOfType("nfsd",   "nfsshare")
 
-	uci.set("samba", "global", "", "samba")
-	uci.set("samba", "global", "workgroup", sambaGroup);
+	uci.set(sambapkg, "global", "", "samba")
+	uci.set(sambapkg, "global", "workgroup", sambaGroup);
 
 	var haveAnonymousFtp = false;
 	var makeDirCmds = [];
@@ -189,7 +189,8 @@ function saveChanges()
 		var shareData = sharePathToShareData[fullMountPath]
 		if( shareData[3] != "" )
 		{
-			makeDirCmds.push("mkdir -p \""  + fullMountPath + "\"" )
+			makeDirCmds.push("mkdir -p \""  + fullMountPath + "\"" );
+			makeDirCmds.push("chmod 777 \""  + fullMountPath + "\"" );
 		}
 
 
@@ -209,7 +210,7 @@ function saveChanges()
 
 		if(isCifs)
 		{
-			var pkg = "samba"
+			var pkg = sambapkg
 			uci.set(pkg, shareId, "", "sambashare")
 			uci.set(pkg, shareId, "name", shareName);
 			uci.set(pkg, shareId, "path", fullMountPath);
@@ -245,7 +246,7 @@ function saveChanges()
 			if(anonymousAccess != "none")
 			{
 				haveAnonymousFtp = true;
-				uci.set(pkg, shareId, "users_" + anonymousAccess, [ "anonymous" ], true);
+				uci.set(pkg, shareId, "users_" + anonymousAccess, (anonymousAccess == "ro" ? roUsers : rwUsers).concat(["anonymous"]), true);
 			}
 
 		}
@@ -280,6 +281,18 @@ function saveChanges()
 		uci.set("vsftpd", "global", "pasv_max_port", pasvMax)
 	}
 
+	if((openvpnrunning || wireguardrunning) && byId('cifs_vpn_access').checked)
+	{
+		var iface = ['lan'];
+		if(openvpnrunning) iface.push('tun0');
+		if(wireguardrunning) iface.push('wg0');
+		uci.set(sambapkg, 'global', 'interface', iface.join(' '));
+	}
+	else
+	{
+		uci.remove(sambapkg, 'global', 'interface');
+	}
+
 
 	var postCommands = [];
 	if(
@@ -291,7 +304,7 @@ function saveChanges()
 		postCommands.push("/etc/init.d/firewall restart");
 	}
 	postCommands.push("/etc/init.d/share_users restart");
-	postCommands.push("/etc/init.d/samba restart");
+	postCommands.push("/etc/init.d/" + sambapkg + " restart");
 	postCommands.push("/etc/init.d/vsftpd restart");
 	postCommands.push("/etc/init.d/nfsd restart");
 
@@ -487,7 +500,8 @@ function resetData()
 	document.getElementById("no_disks").style.display =  storageDrives.length == 0 ?   "block" : "none";
 	document.getElementById("shared_disks").style.display = storageDrives.length > 0 ? "block" : "none";
 	document.getElementById("disk_unmount").style.display = storageDrives.length > 0 ? "block" : "none";
-	document.getElementById("disk_format").style.display  = storageDrives.length > 0 || drivesWithNoMounts.length > 0 ? "block" : "none"
+	document.getElementById("disk_format").style.display  = storageDrives.length > 0 || drivesWithNoMounts.length > 0 ? "block" : "none";
+	document.getElementById("disk_mount").style.display  = drivesWithNoMounts.length > 0 ? "block" : "none";
 	document.getElementById("save_button").disabled = fullVariant == "" ? true : false;
 	document.getElementById("usb_no_share").style.display = fullVariant == "" ? "block" : "none";
 
@@ -496,8 +510,12 @@ function resetData()
 	{
 
 		//workgroup
-		var s =  uciOriginal.getAllSectionsOfType("samba", "samba");
-		document.getElementById("cifs_workgroup").value = s.length > 0 ? uciOriginal.get("samba", s.shift(), "workgroup") : "Workgroup";
+		var s =  uciOriginal.getAllSectionsOfType(sambapkg, "samba");
+		document.getElementById("cifs_workgroup").value = s.length > 0 ? uciOriginal.get(sambapkg, s.shift(), "workgroup") : "Workgroup";
+
+		//cifs vpn
+		var cifsiface = uciOriginal.get(sambapkg, 'global', 'interface');
+		byId('cifs_vpn_access').checked = cifsiface != "";
 
 		// wan access to FTP
 		var wanFtp = uciOriginal.get("firewall", ftpFirewallRule, "local_port") == "21"
@@ -526,7 +544,7 @@ function resetData()
 				userPass.value = ""
 				userTableData.push( [ userNames[userIndex], userPass, userEditButton ] )
 			}
-			var tableObject = createTable(["", "", ""], userTableData, "share_user_table", true, false, removeUserCallback);
+			var tableObject = createTable([usbSStr.User, ""], userTableData, "share_user_table", true, false, removeUserCallback);
 		}
 		else
 		{
@@ -572,7 +590,7 @@ function resetData()
 		nameToSharePath = [];      //global
 
 		var mountedDrives = [];
-		var sambaShares = uciOriginal.getAllSectionsOfType("samba", "sambashare");
+		var sambaShares = uciOriginal.getAllSectionsOfType(sambapkg, "sambashare");
 		var nfsShares = uciOriginal.getAllSectionsOfType("nfsd", "nfsshare");
 		var ftpShares = uciOriginal.getAllSectionsOfType("vsftpd", "share");
 		var getMounted = function(shareList, config)
@@ -607,7 +625,7 @@ function resetData()
 					var shareData = sharePathToShareData[fullSharePath] == null ? ["", "", "", "", "", false, false, false, "none", [], [], "ro", "*" ] :  sharePathToShareData[fullSharePath] ;
 
 					//name
-					if( shareData[0] == "" || config == "samba")
+					if( shareData[0] == "" || config == sambapkg)
 					{
 						shareData[0] = uciOriginal.get(config, shareId, "name");
 						shareData[0] == "" ? shareId : shareData[0];
@@ -616,7 +634,7 @@ function resetData()
 					shareData[2] = shareMountPoint                           //share drive mount
 					shareData[3] = shareDirectory                            //directory
 					shareData[4] = fullSharePath				 //full path
-					shareData[5] = config == "samba"  ? true : shareData[5]  //isCIFS
+					shareData[5] = config == sambapkg  ? true : shareData[5]  //isCIFS
 					shareData[6] = config == "vsftpd" ? true : shareData[6]  //isFTP
 					shareData[7] = config == "nfsd"   ? true : shareData[7]  //isNFS
 
@@ -624,7 +642,7 @@ function resetData()
 					//both samba and vsftpd have ro_users and rw_users list options
 					//however, they handle anonymous access a bit differently
 					//samba has guest_ok option, while vsftpd includes "anonymous" (or "ftp") user in lists
-					if(config == "vsftpd" || config == "samba")
+					if(config == "vsftpd" || config == sambapkg)
 					{
 						var readTypes = ["rw", "ro"]
 						var readTypeShareDataIndices = [9,10]
@@ -655,7 +673,7 @@ function resetData()
 							}
 							shareData[  readTypeShareDataIndices[rtIndex] ] = shareDataUserList;
 						}
-						if(config == "samba")
+						if(config == sambapkg)
 						{
 							//handle anonymous for samba
 							if( uciOriginal.get(config, shareId, "guest_ok").toLowerCase() == "yes" || uciOriginal.get(config, shareId, "public").toLowerCase() == "yes" )
@@ -701,7 +719,7 @@ function resetData()
 			}
 		}
 
-		getMounted(sambaShares, "samba");
+		getMounted(sambaShares, sambapkg);
 		getMounted(ftpShares, "vsftpd");
 		getMounted(nfsShares, "nfsd");
 
@@ -1237,7 +1255,28 @@ function unmountAllUsb()
 	setControlsEnabled(false, true, usbSStr.UDisk);
 
 
-	var commands = "/etc/init.d/samba stop ; /etc/init.d/vsftpd stop ; /etc/init.d/nfsd stop ; /etc/init.d/usb_storage stop ; "
+	var commands = "/etc/init.d/" + sambapkg + " stop ; /etc/init.d/vsftpd stop ; /etc/init.d/nfsd stop ; /etc/init.d/usb_storage stop ; "
+
+	var param = getParameterDefinition("commands", commands) + "&" + getParameterDefinition("hash", document.cookie.replace(/^.*hash=/,"").replace(/[\t ;]+.*$/, ""));
+	var stateChangeFunction = function(req)
+	{
+		if(req.readyState == 4)
+		{
+			//reload page
+			window.location=window.location
+			setControlsEnabled(true);
+		}
+	}
+
+	runAjax("POST", "utility/run_commands.sh", param, stateChangeFunction);
+}
+
+function mountAllUsb()
+{
+	setControlsEnabled(false, true, usbSStr.MDisk);
+
+
+	var commands = "/etc/init.d/usb_storage restart; /etc/init.d/" + sambapkg + " restart; /etc/init.d/vsftpd restart; /etc/init.d/nfsd restart;";
 
 	var param = getParameterDefinition("commands", commands) + "&" + getParameterDefinition("hash", document.cookie.replace(/^.*hash=/,"").replace(/[\t ;]+.*$/, ""));
 	var stateChangeFunction = function(req)
@@ -1399,7 +1438,7 @@ function addUserModal()
 	userpassconfirm = "";
 
 	modalElements = [
-		{"id" : "new_user", "value" : newuser},
+		{"id" : "new_user", "value" : newuser, "disable" : false},
 		{"id" : "user_pass", "value" : userpass},
 		{"id" : "user_pass_confirm", "value" : userpassconfirm}
 	];

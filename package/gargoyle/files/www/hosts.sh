@@ -19,9 +19,10 @@ var arpLines;
 var currentTime;
 var wlanLines;
 <%
+	. /lib/functions/network.sh
 	sh /usr/lib/gargoyle/define_host_vars.sh
-	wan_ip=$(uci -p /tmp/state get network.wan.ipaddr 2>/dev/null)
-	lan_ip=$(uci -p /tmp/state get network.lan.ipaddr 2>/dev/null)
+	network_get_ipaddr wan_ip wan
+	network_get_ipaddr lan_ip lan
 	echo "currentWanIp=\"$wan_ip\";"
 	echo "currentLanIp=\"$lan_ip\";"
 %>
@@ -66,34 +67,40 @@ var wlanLines;
 				<div id="dhcp_data" class="form-group form-inline">
 					<div id="lease_table_container" class="table-responsive"></div>
 				</div>
+
+				<div id="dhcp6_data" class="form-group form-inline">
+					<div id="lease6_table_container" class="table-responsive"></div>
+				</div>
 			</div>
 		</div>
 	</div>
 </div>
 
 <div class="row">
-	<div class="col-lg-12">
+	<div id="wifi_data" class="col-lg-12">
 		<div class="panel panel-default">
 			<div class="panel-heading">
 				<h3 class="panel-title"><%~ ConWifiHosts %></h3>
 			</div>
 
 			<div class="panel-body">
-				<div id="wifi_data" class="form-group form-inline">
+				<div class="form-group form-inline">
 					<div id="wifi_table_container" class="table-responsive"></div>
 				</div>
+
+				<div id="wifi_remote_data" class="form-group form-inline"></div>
 			</div>
 		</div>
 	</div>
 
-	<div class="col-lg-12">
+	<div id="client_wifi_data" class="col-lg-12">
 		<div class="panel panel-default">
 			<div class="panel-heading">
 				<h3 class="panel-title"><%~ ConClientWifi %></h3>
 			</div>
 
 			<div class="panel-body">
-				<div id="client_wifi_data" class="form-group form-inline">
+				<div class="form-group form-inline">
 					<div id="client_wifi_table_container" class="table-responsive"></div>
 				</div>
 			</div>

@@ -23,7 +23,7 @@ then
 fi
 
 #Email header
-echo -e "Subject: Gargoyle Router report - $(date)\r\nFrom: $(cat /etc/msmtprc | grep from | sed "s/ from //")\r\nContent-Type: text/html; charset='UTF-8';\r\n<html><body>" > /tmp/email-log.txt;
+echo -e "Subject: Gargoyle Router report - $(date)\r\nFrom: $(cat /etc/msmtprc | grep from | sed "s/ from //")\r\nContent-Type: text/html; charset='UTF-8';\r\n\r\n<html><body>" > /tmp/email-log.txt;
 
 if printf '%s' "$data" | egrep -q "0"
 then
@@ -34,8 +34,8 @@ then
 	while read line
 	do
 	time=`echo $line | awk '{split($0,a," "); print a[1]}'`
-	ip=`echo $line | awk '{split($0,a," "); print a[2]}'`
-	domain=`echo $line | awk '{split($0,a," "); print a[3]}'`
+	ip=`echo $line | awk '{split($0,a," "); print a[3]}'`
+	domain=`echo $line | awk '{split($0,a," "); print a[4]}'`
 	converttime=$(date -d @$time);
 	echo "<tr><td $tdstyle>"$converttime"</td><td $tdstyle>"$ip"</td><td $tdstyle>"$domain"</td></tr>" >> /tmp/email-log.txt;
 	done < /tmp/work.tmp
@@ -52,8 +52,8 @@ then
 	while read line 
 	do
 	time=`echo $line | awk '{split($0,a," "); print a[1]}'`
-	ip=`echo $line | awk '{split($0,a," "); print a[2]}'`
-	domain=`echo $line | awk '{split($0,a," "); print a[3]}'`
+	ip=`echo $line | awk '{split($0,a," "); print a[3]}'`
+	domain=`echo $line | awk '{split($0,a," "); print a[4]}'`
 	converttime=$(date -d @$time);
 	echo "<tr><td $tdstyle>"$converttime"</td><td $tdstyle>"$ip"</td><td $tdstyle>"$domain"</td></tr>" >> /tmp/email-log.txt;
 	done < /tmp/work.tmp
@@ -190,9 +190,9 @@ echo "</body></html>" >> /tmp/email-log.txt
 
 if printf '%s' "$tls" | egrep -q "0"
 then
-	cat /tmp/email-log.txt | sendmail $receiver 
+	cat /tmp/email-log.txt | msmtp $receiver
 else
-	cat /tmp/email-log.txt | sendmail --tls-trust-file $tlscert $receiver 
+	cat /tmp/email-log.txt | msmtp --tls-trust-file $tlscert $receiver
 fi
 
 rm /tmp/email-log.txt

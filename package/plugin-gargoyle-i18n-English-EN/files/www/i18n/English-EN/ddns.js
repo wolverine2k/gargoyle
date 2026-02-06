@@ -13,7 +13,7 @@ DyDNS.HelpCI="<em>Check Interval</em> specifies how often the router will check 
 DyDNS.HelpFI="<em>Force Update Interval</em> specifies how often the router will connect to your dynamic DNS service provider and update their records, even if your IP has not changed. Service providers will ban users who update too frequently, but may close accounts of users who do not update for over a month.  It is recommended that this parameter be set between 3 and 7 days.";
 DyDNS.UpErr1="Update of new dynamic DNS service configuration(s) failed";
 DyDNS.UpErr2="Service(s) could not be updated properly and have therefore been removed.";
-DyDNS.cNams=["Domain", "Last Update", "Enabled", "", "" ];
+DyDNS.cNams=["Domain", "Service Provider", "Last Update", "Enabled", "", "" ];
 DyDNS.InvErr="ERROR: specified provider is invalid";
 DyDNS.DupErr="Duplicate update specified.";
 DyDNS.ForceU="Force Update";
@@ -22,6 +22,7 @@ DyDNS.UpFErr="Update failed.  Ensure your configuration is valid and that you ar
 DyDNS.UpOK="Update successful.";
 DyDNS.UpSrvErr="Could not update service class.";
 DyDNS.NoScriptErr="You need to install an additional package to use this provider!";
+DyDNS.IPSrc="IP Source";
 
 //ddns_edit.sh
 DyDNS.EDSect="Edit Dynamic DNS Service";
@@ -34,3 +35,5 @@ DyDNS.Eml="E-mail";
 DyDNS.Key="Key";
 DyDNS.AKey="API Key";
 DyDNS.Tokn="Token";
+DyDNS.Host="Host";
+DyDNS.TestDom="Test Domain";

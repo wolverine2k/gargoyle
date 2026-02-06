@@ -13,7 +13,7 @@ DyDNS.HelpCI="<em>Okres sprawdzenia</em> określa jak często router będzie spr
 DyDNS.HelpFI="<em>Okres wymuszonej aktualizacji</em> określa jak często router będzie łączył się z operatorem usługi Dynamiczny DNS i aktualizował wpisy, nawet jeżeli adres IP nie zmienił się. Operatorzy usług mogą blokować konta użytkowników którzy aktualizują dane zbyt często, ale także zamykać konta które nie się aktualizowane ponad miesiąc. Polecane jest ustawienie tego parametru od 3 do 7 dni.";
 DyDNS.UpErr1="Błąd aktualizacji nowej usługi Dynamiczny DNS";
 DyDNS.UpErr2="Serwis nie może być zaktualizowany poprawnie, zostanie więc usunięty.";
-DyDNS.cNams=["Domena", "Ostatnia aktualizacja", "Włączone", "", "" ];
+DyDNS.cNams=["Domena", "Operator usługi", "Ostatnia aktualizacja", "Włączone", "", "" ];
 DyDNS.InvErr="BŁĄD: podany operator jest błędny";
 DyDNS.DupErr="Podano powtórzoną domenę.";
 DyDNS.ForceU="Aktualizuj";
@@ -22,6 +22,7 @@ DyDNS.UpFErr="Błąd aktualizacji. Upewnij się, że Twoja konfiguracja jest pop
 DyDNS.UpOK="Aktualizacja zakończona powodzeniem.";
 DyDNS.UpSrvErr="Nie można zaktualizować klasy serwisu.";
 DyDNS.NoScriptErr="Aby skorzystać z tego dostawcy, musisz zainstalować dodatkowy pakiet!";
+DyDNS.IPSrc="Źródło adresu IP";
 
 //ddns_edit.sh
 DyDNS.EDSect="Edycja usługi Dynamiczny DNS";
@@ -34,3 +35,5 @@ DyDNS.Eml="E-mail";
 DyDNS.Key="Klucz";
 DyDNS.AKey="Klucz API";
 DyDNS.Tokn="Token";
+DyDNS.Host="Urządzenie";
+DyDNS.TestDom="Domena testowa";

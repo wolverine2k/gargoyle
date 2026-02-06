@@ -56,6 +56,7 @@ define Build/Compile
 		CFLAGS="$(TARGET_CFLAGS) -I$(STAGING_DIR)/usr/include" \
 		LDFLAGS="$(TARGET_LDFLAGS) -L$(STAGING_DIR)/usr/lib" \
 		USE_OPENSSL="0" \
+		USE_MBEDTLS="0" \
 		STATIC_LIBS="0"
 endef
 
@@ -74,6 +75,8 @@ endef
 define Package/plugin-gargoyle-ddns-cloudflare/install
 	$(INSTALL_DIR) $(1)/usr/lib/ddns-gargoyle
 	$(CP) ./files/extensions/cloudflare-ddns-helper.sh $(1)/usr/lib/ddns-gargoyle
+	$(CP) ./files/extensions/cloudflare-ddns-helper-ipv4.sh $(1)/usr/lib/ddns-gargoyle
+	$(CP) ./files/extensions/cloudflare-ddns-helper-ipv6.sh $(1)/usr/lib/ddns-gargoyle
 endef
 
 define Package/plugin-gargoyle-ddns-cloudflare/prerm

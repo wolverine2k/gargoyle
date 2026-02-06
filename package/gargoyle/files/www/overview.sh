@@ -60,13 +60,17 @@
 
 	lan_ip=$(/sbin/uci get network.lan.ipaddr 2>/dev/null)
 	if [ -n "$lan_ip" ] ; then
-		echo "var wanDns=\""$(sed -e '/nameserver/!d; s#nameserver ##g' /tmp/resolv.conf.auto | sort | uniq | grep -v "$lan_ip" )"\";"
+		echo "var wanDns=\""$(sed -e '/nameserver/!d; s#nameserver ##g' /tmp/resolv.conf.d/resolv.conf.auto | sort | uniq | grep -v "${lan_ip}$" )"\";"
 	else
-		echo "var wanDns=\""$(sed -e '/nameserver/!d; s#nameserver ##g' /tmp/resolv.conf.auto | sort | uniq )"\";"
+		echo "var wanDns=\""$(sed -e '/nameserver/!d; s#nameserver ##g' /tmp/resolv.conf.d/resolv.conf.auto | sort | uniq )"\";"
 	fi
 
 	echo "var ports = new Array();"
 	/usr/lib/gargoyle/switchinfo.sh
+
+	wan_dev=$(uci -q get network.wan.device)
+	wan_dev_speed=$(. /usr/lib/gargoyle/ethportinfo.sh && get_status_speed "$wan_dev")
+	echo "var wan_port='$wan_dev_speed';"
 
 	if [ -e /var/run/pppoe-wan.pid ]; then
 		deltatime=$((`date -r /var/run/crond.pid +%s`-`date -r /var/run/pppoe-wan.pid +%s`))
@@ -126,6 +130,7 @@
 
 			<div class="panel-body">
 				<ul class="list-group">
+					<li class="list-group-item"><span class="list-group-item-title"><%~ WPrtSpd %>:</span><span id="wan_port_speed"></span></li>
 					<li class="list-group-item"><span class="list-group-item-title"><%~ WIPA %>:</span><span id="wan_ip"></span></li>
 					<li class="list-group-item"><span class="list-group-item-title"><%~ WNmsk %>:</span><span id="wan_mask"></span></li>
 					<li class="list-group-item"><span class="list-group-item-title"><%~ WMAdd %>:</span><span id="wan_mac"></span></li>

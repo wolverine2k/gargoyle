@@ -2,15 +2,29 @@
 # This is free software licensed under the terms of the GNU GPL v2.0
 #
 . /lib/functions.sh
+. /lib/functions/network.sh
 include /lib/network
 
 ra_mask="0x0080"
-ra_mark="$ra_mask/$ra_mask"
+ra_mask_invert="0xFF7F"
+ra_mark="$ra_mask"
 
 death_mask=0x8000
 death_mark="$death_mask"
 
+quota_up_mask="0x7f"
+quota_dn_mask="0x7f00"
+
 wan_if=""
+
+ip_family()
+{
+	ip="$1"
+	ip4=$(echo "$ip" | grep -E "^\d+\.\d+\.\d+\.\d+$")
+	[ -n "$ip4" ] && echo "ipv4"
+	ip6=$(echo "$ip" | grep -E "^([0-9a-fA-F]{0,4}:){1,7}[0-9a-fA-F]{0,4}$")
+	[ -n "$ip6" ] && echo "ipv6"
+}
 
 mask_to_cidr()
 {
@@ -42,21 +56,23 @@ mask_to_cidr()
 
 define_wan_if()
 {
+	no_wan="$(uci -q get network.wan)"
+	if [ -z "$no_wan" ] ; then return ; fi
 	if  [ -z "$wan_if" ] ;  then
 		#Wait for up to 15 seconds for the wan interface to indicate it is up.
 		wait_sec=15
-		while [ -z "$(uci -P /var/state get network.wan.up 2>/dev/null)" ] && [ "$wait_sec" -gt 0 ] ; do
+		while ! network_is_up wan && [ "$wait_sec" -gt 0 ] ; do
 			sleep 1
 			wait_sec=$(($wait_sec - 1))
 		done
 
 		#The interface name will depend on if pppoe is used or not.  If pppoe is used then
-		#the name we are looking for is in network.wan.ifname.  If there is nothing there
+		#the name we are looking for is in network.wan.l3_device.  If there is nothing there
 		#use the device named by network.wan.device
 
-		wan_if=$(uci -P /var/state get network.wan.ifname 2>/dev/null)
+		network_get_device wan_if wan
 		if [ -z "$wan_if" ] ; then
-			wan_if=$(uci -P /var/state get network.wan.device 2>/dev/null)
+			network_get_physdev wan_if wan
 		fi
 	fi
 }
@@ -78,43 +94,65 @@ insert_remote_accept_rules()
 	#add rules for remote_accepts
 	parse_remote_accept_config()
 	{
-		vars="local_port remote_port start_port end_port proto zone"
+		vars="local_port remote_port start_port end_port proto zone family"
 		proto="tcp udp"
 		zone="wan"
+		family="ipv4"
 		for var in $vars ; do
 			config_get $var $1 $var
 		done
 		if [ "$proto" = "tcpudp" ] || [ -z "$proto" ] ; then
 			proto="tcp udp"
 		fi
+		if [ "$family" = "any" ] ; then
+			family="ipv4 ipv6"
+		fi
+		if [ -z "$family" ] ; then
+			family="ipv4"
+		fi
 
-		for prot in $proto ; do
-			if [ -n "$local_port" ] ; then
+		for fam in $family ; do
+			for prot in $proto ; do
+				if [ -n "$local_port" ] ; then
+					if [ -z "$remote_port"  ] ; then
+						remote_port="$local_port"
+					fi
 
-				if [ -z "$remote_port"  ] ; then
-					remote_port="$local_port"
+					#Discourage brute force attacks on ssh from the WAN by limiting failed connection attempts.
+					#Each attempt gets a maximum of 10 password tries by dropbear.
+					if   [ -n "$ssh_max_attempts"  ] && [ "$local_port" = "$ssh_port" ] && [ "$prot" = "tcp" ] ; then
+						# Check and delete the set
+						setexists="$(nft -a list ruleset | grep "set ssh_check_${fam}")"
+						[ -n "$setexists" ] && nft delete set inet fw4 "ssh_check_${fam}"
+						ipstr="ip"
+						[ "$fam" == "ipv6" ] && ipstr="ip6"
+						nft add set inet fw4 "ssh_check_${fam}" \{ type "${fam}_addr"\; timeout 5m\; \}
+						nft add rule inet fw4 "input_${zone}_rule" meta nfproto "$fam" "$prot" dport $ssh_port ct state new add "@ssh_check_${fam}" \{ "$ipstr" saddr \};
+						nft add rule inet fw4 "input_${zone}_rule" "$ipstr" saddr "@ssh_check_${fam}" limit rate over $ssh_max_attempts/minute drop;
+					fi
+
+					if [ "$remote_port" != "$local_port" ] ; then
+						if [ "$fam" = "ipv4" ] ; then
+							#since we're inserting with -I, insert redirect rule first which will then be hit second, after setting connmark
+							nft insert rule inet fw4 "dstnat_${zone}" meta nfproto "$fam" "$prot" dport $remote_port redirect to $local_port
+							nft insert rule inet fw4 "dstnat_${zone}" meta nfproto "$fam" "$prot" dport $remote_port ct mark set ct mark \& "$ra_mask_invert" \| "$ra_mark"
+							nft add rule inet fw4 "input_${zone}_rule" meta nfproto "$fam" "$prot" dport $local_port ct mark \& "$ra_mask" == "$ra_mark" accept
+						else
+							logger -t "gargoyle_firewall_util" "Port Redirect not supported for IPv6"
+						fi
+					else
+						if [ "$fam" = "ipv4" ] ; then
+							nft insert rule inet fw4 "dstnat_${zone}" meta nfproto "$fam" "$prot" dport $remote_port redirect to $local_port
+						fi
+						nft add rule inet fw4 "input_${zone}_rule" meta nfproto "$fam" "$prot" dport $local_port accept
+					fi
+				elif [ -n "$start_port" ] && [ -n "$end_port" ] ; then
+					if [ "$fam" = "ipv4" ] ; then
+						nft insert rule inet fw4 "dstnat_${zone}" meta nfproto "$fam" "$prot" dport "$start_port-$end_port" redirect
+					fi
+					nft add rule inet fw4 "input_${zone}_rule" meta nfproto "$fam" "$prot" dport "$start_port-$end_port" accept
 				fi
-
-				#Discourage brute force attacks on ssh from the WAN by limiting failed conneciton attempts.
-				#Each attempt gets a maximum of 10 password tries by dropbear.
-				if   [ -n "$ssh_max_attempts"  ] && [ "$local_port" = "$ssh_port" ] && [ "$prot" = "tcp" ] ; then
-					iptables -t filter -A "input_${zone}_rule" -p "$prot" --dport $ssh_port -m recent --set --name SSH_CHECK
-					iptables -t filter -A "input_${zone}_rule" -m recent --update --seconds 300 --hitcount $ssh_max_attempts --name SSH_CHECK -j DROP
-				fi
-
-				if [ "$remote_port" != "$local_port" ] ; then
-					#since we're inserting with -I, insert redirect rule first which will then be hit second, after setting connmark
-					iptables -t nat -I "zone_"$zone"_prerouting" -p "$prot" --dport "$remote_port" -j REDIRECT --to-ports "$local_port"
-					iptables -t nat -I "zone_"$zone"_prerouting" -p "$prot" --dport "$remote_port" -j CONNMARK --set-mark "$ra_mark"
-					iptables -t filter -A "input_${zone}_rule" -p $prot --dport "$local_port" -m connmark --mark "$ra_mark" -j ACCEPT
-				else
-					iptables -t nat -I "zone_"$zone"_prerouting" -p "$prot" --dport "$remote_port" -j REDIRECT --to-ports "$local_port"
-					iptables -t filter -A "input_${zone}_rule" -p "$prot" --dport "$local_port" -j ACCEPT
-				fi
-			elif [ -n "$start_port" ] && [ -n "$end_port" ] ; then
-				iptables -t nat -I "zone_"$zone"_prerouting" -p "$prot" --dport "$start_port:$end_port" -j REDIRECT
-				iptables -t filter -A "input_${zone}_rule" -p "$prot" --dport "$start_port:$end_port" -j ACCEPT
-			fi
+			done
 		done
 	}
 	config_load "$config_name"
@@ -126,11 +164,12 @@ insert_remote_accept_rules()
 create_l7marker_chain()
 {
 	# eliminate chain if it exists
-	delete_chain_from_table "mangle" "l7marker"
+	delete_chain_from_table "inet" "fw4" "mangle_l7marker"
 
 	app_proto_num=1
 	app_proto_shift=16
 	app_proto_mask="0xFF0000"
+	app_proto_mask_invert="0x00FFFF"
 
 	all_prots=$(ls /etc/l7-protocols/* | sed 's/^.*\///' | sed 's/\.pat$//' )
 	qos_active=$(ls /etc/rc.d/*qos_gargoyle* 2>/dev/null)
@@ -141,15 +180,16 @@ create_l7marker_chain()
 	all_used="$fw_l7 $qos_l7"
 
 	if [ "$all_used" != " " ] ; then
-		iptables -t mangle -N l7marker
-		iptables -t mangle -I PREROUTING  -m connbytes --connbytes 0:20 --connbytes-dir both --connbytes-mode packets -m connmark --mark 0x0/$app_proto_mask -j l7marker
-		iptables -t mangle -I POSTROUTING -m connbytes --connbytes 0:20 --connbytes-dir both --connbytes-mode packets -m connmark --mark 0x0/$app_proto_mask -j l7marker
+		nft add chain inet fw4 mangle_l7marker
+		nft insert rule inet fw4 mangle_prerouting ct packets <= 20 ct mark \& "$app_proto_mask" == 0x0 jump mangle_l7marker
+		nft insert rule inet fw4 mangle_postrouting ct packets <= 20 ct mark \& "$app_proto_mask" == 0x0 jump mangle_l7marker
 
 		for proto in $all_prots ; do
 			proto_is_used=$(echo "$all_used" | grep "$proto")
 			if [ -n "$proto_is_used" ] ; then
 				app_proto_mark=$(printf "0x%X" $(($app_proto_num << $app_proto_shift)) )
-				iptables -t mangle -A l7marker -m connmark --mark 0x0/$app_proto_mask -m layer7 --l7proto $proto -j CONNMARK --set-mark $app_proto_mark/$app_proto_mask
+				# There is no layer7 module for nftables currently. Below is a fictional rule that matches how the iptables version worked
+				#nft add rule inet fw4 mangle_l7marker ct mark \& "$app_proto_mask" == 0x0 layer7 proto $proto ct mark set ct mark \& "$app_proto_mask_invert" \| "$app_proto_mark"
 				echo "$proto	$app_proto_mark	$app_proto_mask" >> /tmp/l7marker.marks.tmp
 				app_proto_num=$((app_proto_num + 1))
 			fi
@@ -180,24 +220,23 @@ insert_pf_loopback_rules()
 	section_type="redirect"
 
 	#Need to always delete the old chains first.
-	delete_chain_from_table "nat"    "pf_loopback_A"
-	delete_chain_from_table "filter" "pf_loopback_B"
-	delete_chain_from_table "nat"    "pf_loopback_C"
+	delete_chain_from_table "inet" "fw4" "nat_pf_loopback_A"
+	delete_chain_from_table "inet" "fw4" "pf_loopback_B"
+	delete_chain_from_table "inet" "fw4" "nat_pf_loopback_C"
 
 	define_wan_if
 	if [ -z "$wan_if" ]  ; then return ; fi
-	wan_ip=$(uci -p /tmp/state get network.wan.ipaddr)
-	lan_mask=$(uci -p /tmp/state get network.lan.netmask)
+	network_get_ipaddr wan_ip wan
+	network_get_subnet lan_mask lan
 
 	if [ -n "$wan_ip" ] && [ -n "$lan_mask" ] ; then
+		nft add chain inet fw4 nat_pf_loopback_A
+		nft add chain inet fw4 pf_loopback_B
+		nft add chain inet fw4 nat_pf_loopback_C
 
-		iptables -t nat    -N "pf_loopback_A"
-		iptables -t filter -N "pf_loopback_B"
-		iptables -t nat    -N "pf_loopback_C"
-
-		iptables -t nat    -I zone_lan_prerouting -d $wan_ip -j pf_loopback_A
-		iptables -t filter -I zone_lan_forward               -j pf_loopback_B
-		iptables -t nat    -I postrouting_rule -o br-lan     -j pf_loopback_C
+		nft insert rule inet fw4 dstnat_lan ip daddr $wan_ip jump nat_pf_loopback_A
+		nft insert rule inet fw4 forward_lan jump pf_loopback_B
+		nft insert rule inet fw4 srcnat_rule oifname br-lan jump nat_pf_loopback_C
 
 		add_pf_loopback()
 		{
@@ -222,9 +261,9 @@ insert_pf_loopback_rules()
 			dp_colon=$(echo $dp_dash | sed 's/\-/:/g')
 
 			if [ "$all_defined" = "1" ] && [ "$src" = "wan" ] && [ "$dest" = "lan" ]  ; then
-				iptables -t nat    -A pf_loopback_A -p $proto --dport $sdp_colon -j DNAT --to-destination $dest_ip:$dp_dash
-				iptables -t filter -A pf_loopback_B -p $proto --dport $dp_colon -d $dest_ip -j ACCEPT
-				iptables -t nat    -A pf_loopback_C -p $proto --dport $dp_colon -d $dest_ip -s $dest_ip/$lan_mask -j MASQUERADE
+				nft add rule inet fw4 nat_pf_loopback_A $proto dport $sdp_dash dnat ip to $dest_ip:$dp_dash
+				nft add rule inet fw4 pf_loopback_B $proto dport $dp_dash ip daddr $dest_ip accept
+				nft add rule inet fw4 nat_pf_loopback_C $proto dport $dp_dash ip daddr $dest_ip ip saddr $lan_mask masquerade
 			fi
 		}
 
@@ -246,13 +285,13 @@ insert_dmz_rule()
 			config_get $var $1 $var
 		done
 		if [ -n "$from" ] ; then
-			from_if=$(uci -q -p /tmp/state get network.$from.ifname)
+			network_get_device from_if "$from" || \
+				from_if=$(uci -q get network.$from.device)
 		fi
 		# echo "from_if = $from_if"
 		if [ -n "$to_ip" ] && [ -n "$from"  ] && [ -n "$from_if" ] ; then
-			iptables -t nat -A "zone_"$from"_prerouting" -i $from_if -j DNAT --to-destination $to_ip
-			# echo "iptables -t nat -A "prerouting_"$from -i $from_if -j DNAT --to-destination $to_ip"
-			iptables -t filter -I "zone_"$from"_forward" -d $to_ip -j ACCEPT
+			nft add rule inet fw4 "dstnat_${from}" meta nfproto ipv4 iifname $from_if dnat ip to $to_ip
+			nft insert rule inet fw4 "forward_${from}" ip daddr $to_ip accept
 		fi
 	}
 	config_load "$config_name"
@@ -267,28 +306,28 @@ insert_restriction_rules()
 	if [ -e /tmp/restriction_init.lock ] ; then return ; fi
 	touch /tmp/restriction_init.lock
 
-	egress_exists=$(iptables -t filter -L egress_restrictions 2>/dev/null)
-	ingress_exists=$(iptables -t filter -L ingress_restrictions 2>/dev/null)
+	egress_exists=$(nft list table inet fw4 | grep "chain egress_restrictions" 2>/dev/null)
+	ingress_exists=$(nft list table inet fw4 | grep "chain ingress_restrictions" 2>/dev/null)
 
 	if [ -n "$egress_exists" ] ; then
-		delete_chain_from_table filter egress_whitelist
-		delete_chain_from_table filter egress_restrictions
+		delete_chain_from_table "inet" "fw4" "egress_whitelist"
+		delete_chain_from_table "inet" "fw4" "egress_restrictions"
 	fi
 	if [ -n "$ingress_exists" ] ; then
-		delete_chain_from_table filter ingress_whitelist
-		delete_chain_from_table filter ingress_restrictions
+		delete_chain_from_table "inet" "fw4" "ingress_whitelist"
+		delete_chain_from_table "inet" "fw4" "ingress_restrictions"
 	fi
 
-	iptables -t filter -N egress_restrictions
-	iptables -t filter -N ingress_restrictions
-	iptables -t filter -N egress_whitelist
-	iptables -t filter -N ingress_whitelist
+	nft add chain inet fw4 egress_restrictions
+	nft add chain inet fw4 ingress_restrictions
+	nft add chain inet fw4 egress_whitelist
+	nft add chain inet fw4 ingress_whitelist
 
-	iptables -t filter -I FORWARD -o $wan_if -j egress_restrictions
-	iptables -t filter -I FORWARD -i $wan_if -j ingress_restrictions
+	nft insert rule inet fw4 forward oifname $wan_if jump egress_restrictions
+	nft insert rule inet fw4 forward iifname $wan_if jump ingress_restrictions
 
-	iptables -t filter -I egress_restrictions  -j egress_whitelist
-	iptables -t filter -I ingress_restrictions -j ingress_whitelist
+	nft insert rule inet fw4 egress_restrictions jump egress_whitelist
+	nft insert rule inet fw4 ingress_restrictions jump ingress_whitelist
 
 	package_name="firewall"
 	parse_rule_config()
@@ -314,7 +353,7 @@ insert_restriction_rules()
 				uci set "$package_name"."$section".not_connmark="$not_app_proto_connmark/$not_app_proto_mask"
 			fi
 
-			table="filter"
+			table="inet fw4"
 			chain="egress_restrictions"
 			ingress=""
 			target="REJECT"
@@ -339,8 +378,8 @@ insert_restriction_rules()
 				target="ACCEPT"
 			fi
 
-			make_iptables_rules -p "$package_name" -s "$section" -t "$table" -c "$chain" -g "$target" $ingress
-			make_iptables_rules -p "$package_name" -s "$section" -t "$table" -c "$chain" -g "$target" $ingress -r
+			make_nftables_rules -p "$package_name" -s "$section" -t "$table" -c "$chain" -g "$target" $ingress
+			make_nftables_rules -p "$package_name" -s "$section" -t "$table" -c "$chain" -g "$target" $ingress -r
 
 			uci del "$package_name"."$section".connmark 2>/dev/null
 			uci del "$package_name"."$section".not_connmark	 2>/dev/null
@@ -357,13 +396,14 @@ insert_restriction_rules()
 initialize_quotas()
 {
 	define_wan_if
-	if [ -z "$wan_if" ]  ; then return ; fi
+	if [ -z "$wan_if" ] ; then return ; fi
 
 	if [  -e /tmp/quota_init.lock ] ; then return ; fi
 	touch /tmp/quota_init.lock
 
-	lan_mask=$(uci -p /tmp/state get network.lan.netmask)
-	lan_ip=$(uci -p /tmp/state get network.lan.ipaddr)
+	network_get_subnet lan_mask lan
+	network_get_subnet6 lan_ipmask6 lan
+	[ -z "$lan_ipmask6" ] && lan_ipmask6="2001:db8::/32"
 	full_qos_enabled=$(ls /etc/rc.d/*qos_gargoyle 2>/dev/null)
 
 	if [ -n "$full_qos_enabled" ] ; then
@@ -381,10 +421,10 @@ initialize_quotas()
 	# have up and down speeds defined for when quota is exceeded
 	# and full qos is not enabled
 	if [ -z "$full_qos_enabled" ] ; then
-		restore_quotas    -w $wan_if -d $death_mark -m $death_mask -s "$lan_ip/$lan_mask" -c "0 0,4,8,12,16,20 * * * /usr/bin/backup_quotas >/dev/null 2>&1"
+		restore_quotas    -w $wan_if -d $death_mark -m $death_mask -s "$lan_mask" -t $lan_ipmask6 -c "0 0,4,8,12,16,20 * * * /usr/bin/backup_quotas >/dev/null 2>&1"
 		initialize_quota_qos
 	else
-		restore_quotas -q -w $wan_if -d $death_mark -m $death_mask -s "$lan_ip/$lan_mask" -c "0 0,4,8,12,16,20 * * * /usr/bin/backup_quotas >/dev/null 2>&1"
+		restore_quotas -q -w $wan_if -d $death_mark -m $death_mask -s "$lan_mask" -t $lan_ipmask6 -c "0 0,4,8,12,16,20 * * * /usr/bin/backup_quotas >/dev/null 2>&1"
 		cleanup_old_quota_qos
 	fi
 
@@ -474,12 +514,29 @@ initialize_quota_qos()
 		insmod sch_prio  >/dev/null 2>&1
 		insmod sch_tbf   >/dev/null 2>&1
 		insmod cls_fw    >/dev/null 2>&1
+		insmod act_connmark >/dev/null 2>&1
 
-		ifconfig imq0 down  >/dev/null 2>&1
-		ifconfig imq1 down  >/dev/null 2>&1
-		rmmod  imq          >/dev/null 2>&1
-		insmod imq numdevs=1 hook_chains="INPUT,FORWARD" hook_tables="mangle,mangle" >/dev/null 2>&1
-		ip link set imq0 up
+		ifconfig ifb0 down 2>/dev/null
+		rmmod ifb 2>/dev/null
+		# Allow IFB to fail to load 3 times (15 seconds) before we bail out
+		# No particularly graceful way to get out of this one. Quotas will be active but speed limits won't be enforced.
+		insmod ifb >&- 2>&-
+		ip link add ifb0 type ifb 2>/dev/null
+		cnt=0
+		while [ "$(ls -d /proc/sys/net/ipv4/conf/ifb* 2>&- | wc -l)" -eq "0" ]
+			do
+				logger -t "gargoyle_firewall_util" "insmod ifb failed. Waiting and trying again..."
+				cnt=`expr $cnt + 1`
+				if [ $cnt -ge 3 ] ; then
+					logger -t "gargoyle_firewall_util" "Could not insmod ifb, too many retries. Stopping."
+					cleanup_old_quota_qos
+					return
+				fi
+				sleep 5
+				insmod ifb >&- 2>&-
+				ip link add ifb0 type ifb 2>/dev/null
+			done
+		ip link set ifb0 up
 
 		#egress/upload
 		tc qdisc del dev $wan_if root >/dev/null 2>&1
@@ -488,36 +545,47 @@ initialize_quota_qos()
 		upload_shift=0
 		for rate_kb in $unique_up ; do
 			kbit=$(echo $((rate_kb*8))kbit)
-			mark=$(($cur_band << $upload_shift))
-			tc filter add dev $wan_if parent 1:0 prio $cur_band protocol ip  handle $mark fw flowid 1:$cur_band
+			mark=$(printf "0x%x\n" $(($cur_band << $upload_shift)))
+			tc filter add dev $wan_if parent 1:0 prio $cur_band protocol ip  handle $mark/$quota_up_mask fw flowid 1:$cur_band
+			tc filter add dev $wan_if parent 1:0 prio $(($cur_band+1)) protocol ipv6 handle $mark/$quota_up_mask fw flowid 1:$cur_band
 			tc qdisc  add dev $wan_if parent 1:$cur_band handle $cur_band: tbf rate $kbit burst $kbit limit $kbit
-			cur_band=$(($cur_band+1))
+			cur_band=$(($cur_band+2))
 		done
 
 		#ingress/download
-		tc qdisc del dev imq0 root >/dev/null 2>&1
-		tc qdisc add dev imq0 handle 1:0 root prio bands $num_down_bands priomap 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+		tc qdisc del dev ifb0 root >/dev/null 2>&1
+		tc qdisc add dev ifb0 handle 1:0 root prio bands $num_down_bands priomap 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
 		cur_band=2
 		download_shift=8
 		for rate_kb in $unique_down ; do
 			kbit=$(echo $((rate_kb*8))kbit)
-			mark=$(($cur_band << $download_shift))
-			tc filter add dev imq0 parent 1:0 prio $cur_band protocol ip  handle $mark fw flowid 1:$cur_band
-			tc qdisc  add dev imq0 parent 1:$cur_band handle $cur_band: tbf rate $kbit burst $kbit limit $kbit
-			cur_band=$(($cur_band+1))
+			mark=$(printf "0x%x\n" $(($cur_band << $download_shift)))
+			tc filter add dev ifb0 parent 1:0 prio $cur_band protocol ip  handle $mark/$quota_dn_mask fw flowid 1:$cur_band
+			tc filter add dev ifb0 parent 1:0 prio $(($cur_band+1)) protocol ipv6 handle $mark/$quota_dn_mask fw flowid 1:$cur_band
+			tc qdisc  add dev ifb0 parent 1:$cur_band handle $cur_band: tbf rate $kbit burst $kbit limit $kbit
+			cur_band=$(($cur_band+2))
 		done
 
-		iptables -t mangle -I ingress_quotas -i $wan_if -j IMQ --todev 0
+		tc qdisc add dev $wan_if handle ffff: ingress
+		tc filter add dev $wan_if parent ffff: protocol ip u32 match u8 0 0 action connmark action mirred egress redirect dev ifb0 flowid ffff:1
+		tc filter add dev $wan_if parent ffff: protocol ipv6 u32 match u8 0 0 action connmark action mirred egress redirect dev ifb0 flowid ffff:1
 
 		#tc -s qdisc show dev $wan_if
-		#tc -s qdisc show dev imq0
+		#tc -s qdisc show dev ifb0
 	fi
 }
 
 enforce_dhcp_assignments()
 {
 	enforce_assignments=$(uci get firewall.@defaults[0].enforce_dhcp_assignments 2> /dev/null)
-	delete_chain_from_table "filter" "lease_mismatch_check"
+	delete_chain_from_table "inet" "fw4" "lease_mismatch_check"
+	# Check and delete the sets
+	setexists="$(nft -a list ruleset | grep "set lease_mismatch_ips")"
+	[ -n "$setexists" ] && nft delete set inet fw4 lease_mismatch_ips
+	setexists="$(nft -a list ruleset | grep "set lease_mismatch_macs")"
+	[ -n "$setexists" ] && nft delete set inet fw4 lease_mismatch_macs
+	setexists="$(nft -a list ruleset | grep "set lease_mismatch_pairs")"
+	[ -n "$setexists" ] && nft delete set inet fw4 lease_mismatch_pairs
 
 	local pairs1
 	local pairs2
@@ -525,16 +593,19 @@ enforce_dhcp_assignments()
 	pairs1=""
 	pairs2=""
 	if [ -e /tmp/dhcp.leases ] ; then
-		pairs1=$(cat /tmp/dhcp.leases | sed '/^[ \t]*$/d' | awk ' { print $2"^"$3"\n" ; } ' )
+		pairs1=$(cat /tmp/dhcp.leases | sed '/^[ \t]*$/d' | awk ' { print tolower($2)"^"$3"\n" ; } ' )
 	fi
-	if [ -e /etc/ethers ] ; then
-		pairs2=$(cat /etc/ethers | sed '/^[ \t]*$/d' | awk ' { print $1"^"$2"\n" ; } ' )
+	/usr/lib/gargoyle_firewall_util/cache_dhcpv4_leases.sh
+	if [ -e /tmp/dhcpv4configleases.gargoyle ] ; then
+		pairs2=$(cat /tmp/dhcpv4configleases.gargoyle | sed '/^[ \t]*$/d' | awk ' { print tolower($1)"^"$2"\n" ; } ' )
 	fi
 	pairs=$( printf "$pairs1\n$pairs2\n" | sort | uniq )
 
-
 	if [ "$enforce_assignments" = "1" ] && [ -n "$pairs" ] ; then
-		iptables -t filter -N lease_mismatch_check
+		nft add chain inet fw4 lease_mismatch_check
+		nft add set inet fw4 lease_mismatch_ips \{ type ipv4_addr\; \}
+		nft add set inet fw4 lease_mismatch_macs \{ type ether_addr\; \}
+		nft add map inet fw4 lease_mismatch_pairs \{ type ipv4_addr . ether_addr : verdict\; \}
 		local p
 		for p in $pairs ; do
 			local mac
@@ -542,11 +613,15 @@ enforce_dhcp_assignments()
 			mac=$(echo $p | sed 's/\^.*$//g')
 			ip=$(echo $p | sed 's/^.*\^//g')
 			if [ -n "$ip" ] && [ -n "$mac" ] ; then
-				iptables -t filter -A lease_mismatch_check  ! -s  "$ip"  -m mac --mac-source  "$mac"  -j REJECT
-				iptables -t filter -A lease_mismatch_check  -s  "$ip"  -m mac ! --mac-source  "$mac"  -j REJECT
+				nft add element inet fw4 lease_mismatch_ips \{ "$ip" \}
+				nft add element inet fw4 lease_mismatch_macs \{ "$mac" \}
+				nft add element inet fw4 lease_mismatch_pairs \{ "$ip" . "$mac" : return \}
 			fi
 		done
-		iptables -t filter -I delegate_forward -j lease_mismatch_check
+		nft insert rule inet fw4 forward_rule iifname br-lan meta nfproto ipv4 jump lease_mismatch_check
+		nft add rule inet fw4 lease_mismatch_check ip saddr != @lease_mismatch_ips ether saddr != @lease_mismatch_macs return
+		nft add rule inet fw4 lease_mismatch_check ip saddr . ether saddr vmap @lease_mismatch_pairs
+		nft add rule inet fw4 lease_mismatch_check reject
 	fi
 }
 
@@ -554,8 +629,8 @@ force_router_dns()
 {
 	force_router_dns=$(uci get firewall.@defaults[0].force_router_dns 2> /dev/null)
 	if [ "$force_router_dns" = "1" ] ; then
-		iptables -t nat -I zone_lan_prerouting -p tcp --dport 53 -j REDIRECT
-		iptables -t nat -I zone_lan_prerouting -p udp --dport 53 -j REDIRECT
+		nft insert rule inet fw4 dstnat_lan tcp dport 53 redirect
+		nft insert rule inet fw4 dstnat_lan udp dport 53 redirect
 	fi
 }
 
@@ -563,25 +638,24 @@ add_adsl_modem_routes()
 {
 	wan_proto=$(uci -q get network.wan.proto)
 	if [ "$wan_proto" = "pppoe" ] ; then
-		wan_dev=$(uci -q get network.wan.ifname) #not really the interface, but the device
-		iptables -A postrouting_rule -t nat -o $wan_dev -j MASQUERADE
-		iptables -A forwarding_rule -o $wan_dev -j ACCEPT
+		wan_dev=$(uci -q get network.wan.device) #not really the interface, but the device
+		nft add rule inet fw4 srcnat oifname $wan_dev masquerade
+		nft add rule inet fw4 forward_rule oifname $wan_dev accept
 		/etc/ppp/ip-up.d/modemaccess.sh firewall $wan_dev
 	fi
 }
 
 initialize_firewall()
 {
-	iptables -I zone_lan_forward -i br-lan -o br-lan -j ACCEPT
+	nft insert rule inet fw4 forward_lan iifname br-lan oifname br-lan accept
 	insert_remote_accept_rules
 	insert_dmz_rule
 	create_l7marker_chain
 	enforce_dhcp_assignments
 	force_router_dns
 	add_adsl_modem_routes
-        isolate_guest_networks
+	isolate_guest_networks
 }
-
 
 guest_mac_from_uci()
 {
@@ -600,14 +674,19 @@ get_guest_macs()
 }
 isolate_guest_networks()
 {
-	ebtables -t filter -F FORWARD
-	ebtables -t filter -F INPUT
+	# Purge bridge table
+	nft delete table bridge gfw 2>/dev/null
+	#Establish bridge table
+	nft add table bridge gfw
+	nft add chain bridge gfw forward \{ type filter hook forward priority 0\; \}
+	nft add chain bridge gfw input \{ type filter hook input priority 0\; \}
 	local guest_macs=$( get_guest_macs )
 	if [ -n "$guest_macs" ] ; then
 		local lanifs=`brctl show br-lan 2>/dev/null | awk ' $NF !~ /interfaces/ { print $NF } '`
 		local lif
 
-		local lan_ip=$(uci -p /tmp/state get network.lan.ipaddr)
+		local lan_ip
+		network_get_ipaddr lan_ip lan
 
 		for lif in $lanifs ; do
 			for gmac in $guest_macs ; do
@@ -615,15 +694,20 @@ isolate_guest_networks()
 				if [ -n "$is_guest" ] ; then
 					echo "$lif with mac $gmac is wireless guest"
 
-					#Allow access to WAN but not other LAN hosts for anyone on guest network
-					ebtables -t filter -A FORWARD -i "$lif" --logical-out br-lan -j DROP
+					#Allow access to WAN and DHCP/DNS servers on LAN, but not other LAN hosts for anyone on guest network
+					nft insert rule bridge gfw forward iifname "$lif" ip protocol udp udp dport 53 accept
+					nft insert rule bridge gfw forward iifname "$lif" ip protocol udp udp dport 67 accept
+					nft add rule bridge gfw forward iifname "$lif" oifname "br-lan" ip daddr 192.168.0.0/16 drop
+					nft add rule bridge gfw forward iifname "$lif" oifname "br-lan" ip daddr 172.16.0.0/12 drop
+					nft add rule bridge gfw forward iifname "$lif" oifname "br-lan" ip daddr 10.0.0.0/8 drop
+					nft add rule bridge gfw forward iifname "$lif" meta protocol ip6 drop
 
 					#Only allow DHCP/DNS access to router for anyone on guest network
-					ebtables -t filter -A INPUT -i "$lif" -p ARP -j ACCEPT
-					ebtables -t filter -A INPUT -i "$lif" -p IPV4 --ip-protocol udp --ip-destination-port 53 -j ACCEPT
-					ebtables -t filter -A INPUT -i "$lif" -p IPV4 --ip-protocol udp --ip-destination-port 67 -j ACCEPT
-					ebtables -t filter -A INPUT -i "$lif" -p IPV4 --ip-destination $lan_ip -j DROP
-
+					nft add rule bridge gfw input iifname "$lif" ether type arp accept
+					nft add rule bridge gfw input iifname "$lif" ip protocol udp udp dport 53 accept
+					nft add rule bridge gfw input iifname "$lif" ip protocol udp udp dport 67 accept
+					nft add rule bridge gfw input iifname "$lif" ip daddr $lan_ip drop
+					nft add rule bridge gfw input iifname "$lif" meta protocol ip6 drop
 				fi
 			done
 		done
@@ -637,3 +721,4 @@ ifup_firewall()
 	initialize_quotas
 	insert_pf_loopback_rules
 }
+

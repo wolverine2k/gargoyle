@@ -13,7 +13,7 @@ ATH_DEPS=
 LED_DEPS=
 BRCM_DEPS=
 ifeq ($(BOARD),atheros)
-     ATH_DEPS=+wpa-supplicant +hostapd +ebtables +kmod-ebtables
+     ATH_DEPS=+wpa-supplicant +hostapd
      LED_DEPS=+gpioctl
 endif
 
@@ -30,12 +30,16 @@ define Package/gargoyle
 	SECTION:=admin
 	CATEGORY:=Administration
 	TITLE:=Gargoyle Web Interface
-	DEPENDS:=+uci +libuci +haserl-i18n +uhttpd +libustream-openssl +bwmon-gargoyle +webmon-gargoyle +gargoyle-firewall-util +libericstools +gpkg +gargoyle-ip-query  $(ATH_DEPS) $(BRCM_DEPS) $(LED_DEPS)
+	DEPENDS:=+uci +libuci +libjson-c +haserl-i18n +uhttpd +libustream-mbedtls +bwmon-gargoyle +webmon-gargoyle +libericstools +gpkg +gargoyle-ip-query  $(ATH_DEPS) $(BRCM_DEPS) $(LED_DEPS)
 	MAINTAINER:=Eric Bishop <eric@gargoyle-router.com>
 endef
 
 define Package/gargoyle/description
 	A user-friendly web interface for OpenWrt
+endef
+
+define Package/gargoyle/config
+	select PACKAGE_gargoyle-firewall-util
 endef
 
 define Build/Prepare
@@ -51,10 +55,18 @@ define Build/Compile
 		LDFLAGS="$(TARGET_LDFLAGS) -L $(STAGING_DIR)/usr/lib" 
 endef
 
+# escape commas, backslashes, squotes, and ampersands for sed
+define sed_escape
+$(subst &,\&,$(subst $(comma),\$(comma),$(subst ','\'',$(subst \,\\,$(1)))))
+endef
+#'
+
 define Package/gargoyle/install
 	$(INSTALL_DIR) $(1)
 	$(CP) ./files/* $(1)/
 	mkdir -p $(1)/www/data/
+	mkdir -p $(1)/www/hooks/
+	mkdir -p $(1)/www/hooks/login/
 
 	( \
 		if [ -n "$(OFFICIAL_VERSION)" ] ; then \
@@ -69,13 +81,16 @@ define Package/gargoyle/install
 	$(INSTALL_BIN) $(PKG_BUILD_DIR)/gargoyle_header_footer $(1)/usr/bin
 	$(INSTALL_BIN) $(PKG_BUILD_DIR)/gargoyle_session_validator $(1)/usr/bin
 	$(SED) 's,%CURYEAR,$(shell date -u +%Y),g' $(1)/www/about.sh
+	$(SED) 's,%GV,$(call sed_escape,$(GARGOYLE_DISTRIB_RELEASE)),g' \
+		-e 's,%GR,$(call sed_escape,$(GARGOYLE_DISTRIB_REVISION)),g' \
+		-e 's,%GT,$(call sed_escape,$(GARGOYLE_DISTRIB_TARGET)),g' \
+		-e 's,%GP,$(call sed_escape,$(GARGOYLE_DISTRIB_PROFILE)),g' \
+		-e 's,%GD,$(call sed_escape,$(GARGOYLE_DISTRIB_DESCRIPTION)),g' \
+		$(1)/etc/gargoyle_release
 endef
 
 
 define Package/gargoyle/postinst
-
-	cat $${IPKG_INSTROOT}/etc/config/system | sed -r 's/timezone.*UTC/timezone \"GMT0BST\,M3\.5\.0\/2,M10\.5\.0\/2\"/' > $${IPKG_INSTROOT}/etc/config/system.tmp
-	mv $${IPKG_INSTROOT}/etc/config/system.tmp $${IPKG_INSTROOT}/etc/config/system
 
 	#if this is brcm-2.4, remove client bridge hotplug script, this isn't necessary for brcm-2.4
 	if [ -e $${IPKG_INSTROOT}/usr/sbin/nas ] ; then

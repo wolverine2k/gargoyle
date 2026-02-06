@@ -42,6 +42,7 @@
 #include <netdb.h>
 #include <signal.h>
 #include <netinet/ip_icmp.h>
+#include <netinet/icmp6.h>
 
 #ifndef ONLYBG
 #include <ncurses.h>
@@ -51,10 +52,6 @@
 #define MAXPACKET   100   /* max packet size */
 #define BACKGROUND  3     /* Detact and run in the background */
 #define ADDENTITLEMENT 4
-
-#ifndef MAXHOSTNAMELEN
-#define MAXHOSTNAMELEN  64
-#endif
 
 //The number of arguments needed for two of our kernel calls changed
 //in iproute2 after v2.6.29 (not sure when).  We will use the new define
@@ -89,23 +86,24 @@ int s;              /* Socket file descriptor */
 struct hostent *hp; /* Pointer to host info */
 struct timezone tz; /* leftover */
 
-struct sockaddr_in whereto;/* Who to ping */
+struct sockaddr_storage whereto;/* Who to ping */
 int datalen=64-8;   /* How much data */
 
 const char usage[] =
-"Gargoyle active congestion controller version 2.4\n\n"
+"Gargoyle active congestion controller version 2.5\n\n"
 "Usage:  qosmon [options] pingtime pingtarget bandwidth [pinglimit]\n" 
 "              pingtime   - The ping interval the monitor will use when active in ms.\n"
 "              pingtarget - The URL or IP address of the target host for the monitor.\n"
 "              bandwidth  - The maximum download speed the WAN link will support in kbps.\n"
 "              pinglimit  - Optional pinglimit to use for control, otherwise measured.\n"
 "              Options:\n"
-"                     -b  - Run in the background\n"
-"                     -a  - Add entitlement to pinglimt, enable auto ACTIVE/MINRTT mode switching.\n\n"
+"                     -b            - Run in the background\n"
+"                     -a            - Add entitlement to pinglimt, enable auto ACTIVE/MINRTT mode switching.\n\n"
+"                     -s            - Skip initial link measurement.\n\n"
+"                     -t <triptime> - Set initial ping time in ms (used with -s)\n\n"
+"                     -l <limit>    - Set initial fair link limit in kbps (used with -s).\n\n"
 "        SIGUSR1 can be used to reset the link bandwidth at anytime.\n";
 
-char *hostname;
-char hnamebuf[MAXHOSTNAMELEN];
 
 uint16_t ntransmitted = 0;   /* sequence # for outbound packets = #sent */
 uint16_t ident;
@@ -131,7 +129,7 @@ struct CLASS_STATS {
    u_char     actflg;      //True if class is active.
    long int   cbw_flt;     //Class bandwidth subject to filter. (bps)
    long int   cbw_flt_rt;  //Class realtime bandwidth subject to filter. (bps)
-   long       bwtime;      //Timestamp of last byte reading.
+   int64_t    bwtime;      //Timestamp of last byte reading.
 };
 
 #define STATCNT 30
@@ -176,7 +174,7 @@ int sel_err=0;           //Last error code returned by select
 #define DAEMON_NAME "qosmon"
 
 #ifndef DEVICE
-#define DEVICE "imq0"
+#define DEVICE "ifb0"
 #endif
 
 #define EXIT_SUCCESS 0
@@ -275,26 +273,45 @@ int in_cksum(u_short *addr, int len)
 void pinger(void)
 {
     static u_char outpack[MAXPACKET];
-    struct icmp *icp = (struct icmp *) outpack;
     int i, cc;
     struct timeval *tp = (struct timeval *) &outpack[8];
     u_char *datap = &outpack[8+sizeof(struct timeval)];
 
-    icp->icmp_type = ICMP_ECHO;
-    icp->icmp_code = 0;
-    icp->icmp_cksum = 0;
-    icp->icmp_seq = ++ntransmitted;
-    icp->icmp_id = ident;       /* ID */
+    if(whereto.ss_family == AF_INET6)
+    {
+        struct icmp6_hdr *icp = (struct icmp6_hdr *) outpack;
+        icp->icmp6_type = ICMP6_ECHO_REQUEST;
+        icp->icmp6_code = 0;
+        icp->icmp6_cksum = 0;
+        icp->icmp6_seq = ++ntransmitted;
+        icp->icmp6_id = ident;       /* ID */
+        cc = datalen+8;         /* skips ICMP portion */
 
-    cc = datalen+8;         /* skips ICMP portion */
+        gettimeofday( tp, &tz );
 
-    gettimeofday( tp, &tz );
+        for( i=8; i<datalen; i++)   /* skip 8 for time */
+            *datap++ = i;
+    }
+    else
+    {
+        struct icmp *icp = (struct icmp *) outpack;
+        icp->icmp_type = ICMP_ECHO;
+        icp->icmp_code = 0;
+        icp->icmp_cksum = 0;
+        icp->icmp_seq = ++ntransmitted;
+        icp->icmp_id = ident;       /* ID */
+        cc = datalen+8;         /* skips ICMP portion */
 
-    for( i=8; i<datalen; i++)   /* skip 8 for time */
-        *datap++ = i;
+        gettimeofday( tp, &tz );
 
-    /* Compute ICMP checksum here */
-    icp->icmp_cksum = in_cksum( (u_short *) icp, cc );
+        for( i=8; i<datalen; i++)   /* skip 8 for time */
+            *datap++ = i;
+
+        /* Compute ICMP checksum here */
+        icp->icmp_cksum = in_cksum( (u_short *) icp, cc );
+    }
+    
+    //printf("Sent pkt at %ld.%06ld\n", (long int)(tp->tv_sec), (long int)(tp->tv_usec));
 
     /* cc = sendto(s, msg, len, flags, to, tolen) */
     i = sendto( s, outpack, cc, 0, (const struct sockaddr *)  &whereto, sizeof(whereto) );
@@ -326,40 +343,67 @@ void tvsub(register struct timeval *out, register struct timeval *in)
  * which arrive ('tis only fair).  This permits multiple copies of this
  * program to be run without having intermingled output (or statistics!).
  */
-char pr_pack( void *buf, int cc, struct sockaddr_in *from )
+char pr_pack( void *buf, int cc, struct sockaddr_storage *from )
 {
     struct ip *ip;
     struct icmp *icp;
+    struct icmp6_hdr *icp6;
     struct timeval tv;
     struct timeval *tp;
     int hlen,triptime;
-    struct in_addr tip;
+    uint16_t seq;
 
-    from->sin_addr.s_addr = ntohl( from->sin_addr.s_addr );
     gettimeofday( &tv, &tz );
 
-    ip = (struct ip *) buf;
-    hlen = ip->ip_hl << 2;
-    if (cc < hlen + ICMP_MINLEN) {
-        tip.s_addr = ntohl(*(uint32_t *) &from->sin_addr);
-        return 0;
+    if(from->ss_family == AF_INET6)
+    {
+        if(cc < sizeof(struct icmp6_hdr))
+        {
+            return 0;
+        }
+        icp6 = (struct icmp6_hdr*)buf;
+        if(icp6->icmp6_type != ICMP6_ECHO_REPLY)
+        {
+            return 0;
+        }
+        if(icp6->icmp6_id != ident)
+        {
+            return 0;
+        }
+        
+        seq = icp6->icmp6_seq;
+        
+        tp = (struct timeval *)&icp6->icmp6_dataun.icmp6_un_data32[1];
     }
+    else
+    {
+        ip = (struct ip *) buf;
+        hlen = ip->ip_hl << 2;
+        if (cc < hlen + ICMP_MINLEN) {
+            return 0;
+        }
 
-    icp = (struct icmp *)(buf + hlen);
-    if( icp->icmp_type != ICMP_ECHOREPLY )  {
-        tip.s_addr = ntohl(*(uint32_t *) &from->sin_addr);
-        return 0;
+        icp = (struct icmp *)(buf + hlen);
+        if( icp->icmp_type != ICMP_ECHOREPLY )  {
+            return 0;
+        }
+
+        if( icp->icmp_id != ident )
+            return 0;           /* 'Twas not our ECHO */
+        
+        seq = icp->icmp_seq;
+        
+        tp = (struct timeval *)&icp->icmp_data[0];
     }
-
-    if( icp->icmp_id != ident )
-        return 0;           /* 'Twas not our ECHO */
+    
+    //printf("Rcvd pkt at %ld.%06ld\n", (long int)(tp->tv_sec), (long int)(tp->tv_usec));
+    
 
     nreceived++;
 
     //If it was not the packet we are looking for return now.
-    if (icp->icmp_seq != ntransmitted) return 0;
+    if (seq != ntransmitted) return 0;
     
-    tp = (struct timeval *)&icp->icmp_data[0];
     tvsub( &tv, tp );
     triptime = tv.tv_sec*1000+(tv.tv_usec/1000);
             
@@ -381,11 +425,9 @@ char pr_pack( void *buf, int cc, struct sockaddr_in *from )
 //These variables referenced but not used by the tc code we link to.
 int filter_ifindex;
 int use_iec = 0;
-int resolve_hosts = 0;
 
 
-int print_class(const struct sockaddr_nl *who,
-               struct nlmsghdr *n, void *arg)
+int print_class(struct nlmsghdr *n, void *arg)
 {
     struct tcmsg *t = NLMSG_DATA(n);
     int len = n->nlmsg_len;
@@ -394,6 +436,7 @@ int print_class(const struct sockaddr_nl *who,
     u_char actflg=0;
     unsigned long long work=0;
     struct timespec newtime;
+    int64_t now_ns;
 
     if (n->nlmsg_type != RTM_NEWTCLASS && n->nlmsg_type != RTM_DELTCLASS) {
         fprintf(stderr, "Not a class\n");
@@ -485,7 +528,8 @@ int print_class(const struct sockaddr_nl *who,
         return 0;
     }
 
-         
+    now_ns = (int64_t)newtime.tv_sec * 1000000000LL + (int64_t)newtime.tv_nsec;
+
     //Avoid a big jolt on the first pass.
     if (firstflg) {
 		classptr->bytes = work;
@@ -494,10 +538,10 @@ int print_class(const struct sockaddr_nl *who,
     //Update the filtered bandwidth based on what happened unless a rollover occured.
     if (work >= classptr->bytes) {
         long int bw;
-        long bperiod;
+        long bperiod; // always in ms
 
         //Calculate an accurate time period for the bps calculation.
-        bperiod=(newtime.tv_nsec-classptr->bwtime)/1000000;
+        bperiod = (now_ns - classptr->bwtime) / 1000000LL; // ns -> ms
         if (bperiod<period/2) bperiod=period;
         bw = (work - classptr->bytes)*8000/bperiod;  //bps per second x 1000 here
 
@@ -519,7 +563,7 @@ int print_class(const struct sockaddr_nl *who,
 
     }
 
-    classptr->bwtime=newtime.tv_nsec;
+    classptr->bwtime=now_ns;
     classptr->bytes = work;
     classptr->actflg = actflg;
 
@@ -690,6 +734,7 @@ void update_status( FILE* fd )
     }
 
     fflush(fd);
+    ftruncate(fileno(fd), ftell(fd));
 
 #ifndef ONLYBG
     if (DEAMON) return;
@@ -725,6 +770,9 @@ void update_status( FILE* fd )
               cptr->cbw_flt/1000);
         cptr++;
     }
+    time_t now;
+    time(&now);
+    printw("Print time: %s\n",ctime(&now));
 
     refresh();
 #endif
@@ -744,24 +792,48 @@ void resetsig(int parm)
  */
 int main(int argc, char *argv[])
 {
-    struct sockaddr_in from;
+    struct sockaddr_storage from;
     char **av = argv;
-    struct sockaddr_in *to = &whereto;
+    struct sockaddr_storage *to = &whereto;
     int on = 1;
     struct protoent *proto;
     float err;
+    struct addrinfo* ainfo;
+    int skip_initial_measurement = 0;
+    int custom_triptime = -1;
+    int custom_bwlimit = -1;
 
 
     argc--, av++;
     while (argc > 0 && *av[0] == '-') {
-        while (*++av[0]) switch (*av[0]) {
-            case 'b':
-                pingflags |= BACKGROUND;
-                break;
+        while (*++av[0]) {
+            switch (*av[0]) {
+                case 'b':
+                    pingflags |= BACKGROUND;
+                    break;
 
-            case 'a':
-                pingflags |= ADDENTITLEMENT;
-                break;
+                case 'a':
+                    pingflags |= ADDENTITLEMENT;
+                    break;
+
+                case 's':
+                    skip_initial_measurement = 1;
+                    break;
+
+                case 't':
+                    if(argc > 1) {
+                        custom_triptime = atoi(*++av);
+                        argc--;
+                    }
+                    break;
+
+                case 'l':
+                    if(argc > 1) {
+                        custom_bwlimit = atoi(*++av);
+                        argc--;
+                    }
+                    break;
+            }
         }
         argc--, av++;
     }
@@ -785,18 +857,23 @@ int main(int argc, char *argv[])
     }
 
     bzero((char *)&whereto, sizeof(whereto) );
-    to->sin_family = AF_INET;
-    to->sin_addr.s_addr = inet_addr(av[1]);
-    if(to->sin_addr.s_addr != (unsigned)-1) {
-        strcpy(hnamebuf, av[1]);
-        hostname = hnamebuf;
-    } else {
-        hp = gethostbyname(av[1]);
-        if (hp) {
-            to->sin_family = hp->h_addrtype;
-            bcopy(hp->h_addr, (caddr_t)&to->sin_addr, hp->h_length);
-            hostname = hp->h_name;
-        } else {
+    if(inet_pton(AF_INET6, av[1], &(((struct sockaddr_in6*)to)->sin6_addr)) == 1)
+    {
+        ((struct sockaddr_in6*)to)->sin6_family = AF_INET6;
+    }
+    else if(inet_pton(AF_INET, av[1], &(((struct sockaddr_in*)to)->sin_addr)) == 1)
+    {
+        ((struct sockaddr_in*)to)->sin_family = AF_INET;
+    }
+    else
+    {
+        if(getaddrinfo(av[1],NULL,NULL,&ainfo) == 0)
+        {
+            memcpy(to, ainfo->ai_addr, ainfo->ai_addrlen);
+            freeaddrinfo(ainfo);
+        }
+        else
+        {
             fprintf(stderr, "%s: unknown host %s\n", argv[1], av[1]);
             exit(1);
         }
@@ -820,8 +897,8 @@ int main(int argc, char *argv[])
 
     ident = getpid() & 0xFFFF;
 
-    if ((proto = getprotobyname("icmp")) == NULL) {
-        fprintf(stderr, "icmp: unknown protocol\n");
+    if ((proto = getprotobyname(to->ss_family == AF_INET ? "icmp" : "ipv6-icmp")) == NULL) {
+        fprintf(stderr, "%s: unknown protocol\n",(to->ss_family == AF_INET ? "icmp" : "ipv6-icmp"));
         exit(10);
     }
 
@@ -890,7 +967,7 @@ int main(int argc, char *argv[])
     //These are called here because the above daemon() call closes
     //open files.
     statusfd = fopen("/tmp/qosmon.status","w");
-    s = socket(AF_INET, SOCK_RAW, proto->p_proto);
+    s = socket(to->ss_family, SOCK_RAW, proto->p_proto);
 
 
     //Check that things opened correctly.
@@ -941,6 +1018,24 @@ int main(int argc, char *argv[])
     //We will fix it later.
     rawfltime_max = period*1000;
 
+    //If we are skipping initial link unload + measure, set some reasonable defaults and push us
+    //straight into the IDLE state
+    if (skip_initial_measurement) {
+        int default_bw = DBW_UL * 0.9;
+        qstate = QMON_IDLE;
+        pingon = 0;
+        fil_triptime = (custom_triptime > 0) ? custom_triptime * 1000 : 20000; // Start with 20ms, it will update as needed
+        if (pingflags & ADDENTITLEMENT) {
+            pinglimit += (1.1 * fil_triptime);
+        } else {
+            pinglimit = 2.0 * fil_triptime;
+        }
+        rawfltime_max = 2 * pinglimit;
+        saved_realtime_limit = saved_active_limit = new_dbw_ul = (custom_bwlimit > 0) ? custom_bwlimit * 1000 : default_bw;
+        tc_class_modify(new_dbw_ul);
+        //firstflg = 0; // We can't set this until after we have checked class counts below
+    }
+
     while (!sigterm) {
         int len = sizeof (packet);
         socklen_t fromlen = sizeof (from);
@@ -967,7 +1062,12 @@ int main(int argc, char *argv[])
         //select() returns 1 if there is data to read.
         //                 0 if the time has expired.
         //                -1 if a signal arrived. 
-        while  (sel_err=select(s+1, &fdmask, NULL, NULL, &timeout)) {
+        while  (sel_err=select(s+1, &fdmask, NULL, NULL, &timeout))
+        {
+              //Reset timeout value which may have been overwritten by select()
+              //Also halve it so that the loop is tighter
+              timeout.tv_sec = 0;
+              timeout.tv_usec = period*0.5*1000;
 
               //Signal arrived, just loop and keep waiting.
               if (sel_err == -1) continue;
@@ -1000,7 +1100,10 @@ int main(int argc, char *argv[])
             qstate=QMON_CHK; 
             continue;
         }
-
+        else if(skip_initial_measurement) {
+            firstflg=0;
+        }
+        skip_initial_measurement=0; //Reset this now
  
         //Initialize or reinitialize the fair linklimit.
         if (resetbw) {

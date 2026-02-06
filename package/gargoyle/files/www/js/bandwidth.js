@@ -101,12 +101,14 @@ function initializePlotsAndTable()
 	setSelectedValue("table_time_frame", tableTimeFrame);
 	setSelectedValue("table_units", "mixed");
 
-	document.getElementById("use_high_res_15m").checked = uciOriginal.get("gargoyle", "bandwidth_display", "high_res_15m") == "1" ? true : false;
+	var bwmonEnabled = uciOriginal.get("bwmon_gargoyle", "global", "enabled") == "1" ? true : false;
+	byId("enable_bwmon").checked = bwmonEnabled;
+	byId("use_high_res_15m").checked = uciOriginal.get("bwmon_gargoyle", "global", "high_res_15m") == "1" ? true : false;
 
-	var bwUCIval = uciOriginal.get("gargoyle", "bandwidth_display", "custom_bwmon_enable");
+	var bwUCIval = uciOriginal.get("bwmon_gargoyle", "custom_monitor", "enable");
 	var enable_custom_bwmon = (bwUCIval == "0") || (bwUCIval == "") ? 0 : 1;
-	document.getElementById("enable_custom_bwmon").checked = enable_custom_bwmon;
-	document.getElementById("custom_reset_day").disabled = enable_custom_bwmon ? false : true;
+	byId("enable_custom_bwmon").checked = enable_custom_bwmon;
+	byId("custom_reset_day").disabled = enable_custom_bwmon ? false : true;
 	var vals = [];
 	var names = [];
 	var day=1;
@@ -131,7 +133,7 @@ function initializePlotsAndTable()
 		vals.push( (day-1) + "" );
 	}
 	setAllowableSelections("custom_reset_day", vals, names, document);
-	bwUCIval = uciOriginal.get("gargoyle", "bandwidth_display", "month_reset_day");
+	bwUCIval = uciOriginal.get("bwmon_gargoyle", "custom_monitor", "month_reset_day");
 	document.getElementById("custom_reset_day").value = bwUCIval == "" ? "0" : bwUCIval;
 	if(enable_custom_bwmon){addOptionToSelectElement("table_time_frame", bndwS.mnths + " " + bndwS.CustBMon, 6);}
 
@@ -139,6 +141,7 @@ function initializePlotsAndTable()
 	var haveQosDownload = false;
 	var haveTor = false;
 	var haveOpenvpn = false;
+	var haveWireguard = false;
 	var monitorIndex;
 	for(monitorIndex=0; monitorIndex < monitorNames.length; monitorIndex++)
 	{
@@ -173,6 +176,7 @@ function initializePlotsAndTable()
 		}
 		haveTor = monId.match(/tor/) ? true : haveTor;
 		haveOpenvpn = monId.match(/openvpn/) ? true : haveOpenvpn;
+		haveWireguard = monId.match(/wireguard/) ? true: haveWireguard;
 	}
 	var plotIdNames = ["plot1_type", "plot2_type", "plot3_type", "table_type"];
 	var idIndex;
@@ -195,6 +199,10 @@ function initializePlotsAndTable()
 		{
 			addOptionToSelectElement(plotIdName, "OpenVPN", "openvpn");
 		}
+		if(haveWireguard)
+		{
+			addOptionToSelectElement(plotIdName, "Wireguard", "wireguard");
+		}
 
 		addOptionToSelectElement(plotIdName, UI.HsNm, "hostname");
 		addOptionToSelectElement(plotIdName, "IP", "ip");
@@ -210,7 +218,10 @@ function initializePlotsAndTable()
 	downloadMonitors = ["","",""];
 	updateInProgress = false;
 	setTimeout(resetPlots, 150); //for some reason Opera 10.50 craps out if we try to load plot functions immediately
-	updateInterval = setInterval(doUpdate, 2000);
+	if(bwmonEnabled)
+	{
+		updateInterval = setInterval(doUpdate, 2000);
+	}
 }
 
 
@@ -237,7 +248,7 @@ function getMonitorId(isUp, graphTimeFrameIndex, plotType, plotId, graphLowRes)
 
 
 	var hr15m = uciOriginal.get("gargoyle", "bandwidth_display", "high_res_15m");
-	graphTimeFrameIndex = graphTimeFrameIndex == 1 && plotType != "total" && (!plotType.match(/tor/)) && (!plotType.match(/openvpn/)) && hr15m == "1" && (!graphLowRes) ? 0 : graphTimeFrameIndex;
+	graphTimeFrameIndex = graphTimeFrameIndex == 1 && plotType != "total" && (!plotType.match(/tor/)) && (!plotType.match(/openvpn/)) && (!plotType.match(/wireguard/)) && hr15m == "1" && (!graphLowRes) ? 0 : graphTimeFrameIndex;
 
 
 
@@ -265,6 +276,10 @@ function getMonitorId(isUp, graphTimeFrameIndex, plotType, plotId, graphLowRes)
 	{
 		match1 = graphLowRes ? "openvpn-lr" + graphTimeFrameIndex : "openvpn-hr" + graphTimeFrameIndex;
 	}
+	else if(plotType.match(/wireguard/))
+	{
+		match1 = graphLowRes ? "wireguard-lr" + graphTimeFrameIndex : "wireguard-hr" + graphTimeFrameIndex;
+	}
 	else if(plotType == "ip" || plotType == "hostname")
 	{
 		match1 = "bdist" + graphTimeFrameIndex;
@@ -287,19 +302,36 @@ function getMonitorId(isUp, graphTimeFrameIndex, plotType, plotId, graphLowRes)
 	return selectedName;
 }
 
-
 function getHostnameList(ipList)
 {
-	var hostnameList = [];
+	var hostnameList = [[],[]];
 	var ipIndex =0;
 	for(ipIndex=0; ipIndex < ipList.length; ipIndex++)
 	{
 		var ip = ipList[ipIndex];
 		var host = ipToHostname[ip] == null ? ip : ipToHostname[ip];
 		host = host.length < 25 ? host : host.substr(0,22)+"...";
-		hostnameList.push(host);
+		if(hostnameList[1].indexOf(host) < 0)
+		{
+			hostnameList[0].push(ip);
+			hostnameList[1].push(host);
+		}
 	}
 	return hostnameList;
+}
+
+function getAllIPForHostname(hostname)
+{
+	var ipList = [];
+	for(ip in ipToHostname)
+	{
+		if(ipToHostname[ip] == hostname)
+		{
+			ipList.push(ip);
+		}
+	}
+	
+	return ipList;
 }
 
 function resetPlots()
@@ -323,7 +355,7 @@ function resetPlots()
 		{
 			var t = getSelectedValue("plot" + plotNum + "_type");
 			var is15MHighRes = graphTimeFrameIndex == 1 && uciOriginal.get("gargoyle", "bandwidth_display", "high_res_15m") == "1";
-			graphLowRes = graphLowRes || (t != "total" && t != "none" && t != "tor" && t != "openvpn" && (!is15MHighRes));
+			graphLowRes = graphLowRes || (t != "total" && t != "none" && t != "tor" && t != "openvpn" && t != "wireguard" && (!is15MHighRes));
 		}
 		for(plotNum=1; plotNum<=4; plotNum++)
 		{
@@ -336,11 +368,12 @@ function resetPlots()
 
 			if(plotType == "ip" || plotType == "hostname")
 			{
-				if(plotId.match(/^[0-9]+\./) == null)
+				if(plotId.match(/^[0-9]+[\.:]/) == null)
 				{
 					if(plotType == "hostname")
 					{
-						setAllowableSelections(plotIdName, ipsWithData, getHostnameList(ipsWithData));
+						var selOpts = getHostnameList(ipsWithData);
+						setAllowableSelections(plotIdName, selOpts[0], selOpts[1]);
 					}
 					else
 					{
@@ -377,7 +410,7 @@ function resetPlots()
 
 			if(!plotsInitializedToDefaults)
 			{
-				if(plotType != "" && plotType != "none" && plotType != "total" && plotType != "tor" && plotType != "openvpn" )
+				if(plotType != "" && plotType != "none" && plotType != "total" && plotType != "tor" && plotType != "openvpn" && plotType != "wireguard" )
 				{
 					var idValue = bandwidthSettings.get(plotIdName, "none");
 					if(idValue != "" && (plotType == "ip" || plotType == "hostname") )
@@ -581,7 +614,7 @@ function doUpdate()
 								var ip;
 								for (ip in monitorData)
 								{
-									if( ((selectedPlotType == "total" || selectedPlotType.match("qos") || selectedPlotType.match("tor") || selectedPlotType.match("openvpn") ) && ip == "COMBINED") || (selectedPlotType != "total" && ip != "COMBINED") )
+									if( ((selectedPlotType == "total" || selectedPlotType.match("qos") || selectedPlotType.match("tor") || selectedPlotType.match("openvpn") || selectedPlotType.match("wireguard") ) && ip == "COMBINED") || (selectedPlotType != "total" && ip != "COMBINED") )
 									{
 										ipList.push(getDisplayIp(ip));
 									}
@@ -614,7 +647,8 @@ function doUpdate()
 										//if new ip list differs from allowable selections, update
 										if(selectedPlotType == "hostname")
 										{
-											setAllowableSelections(plotIdName, ipList, getHostnameList(ipList));
+											var selOpts = getHostnameList(ipList);
+											setAllowableSelections(plotIdName, selOpts[0], selOpts[1]);
 										}
 										else
 										{
@@ -628,7 +662,34 @@ function doUpdate()
 									}
 
 									ip = ip == null ? "" : getRealIp(ip);
-									var points = monitorData[ip][0]
+									var points;
+									if(ipToHostname[ip] !== undefined && selectedPlotType == "hostname")
+									{
+										var ipList = getAllIPForHostname(ipToHostname[ip]);
+										pointsInitialised = 0;
+										for(ipIdx = 0; ipIdx < ipList.length; ipIdx++)
+										{
+											if(monitorData[ipList[ipIdx]] !== undefined)
+											{
+												if(pointsInitialised == 0)
+												{
+													(points = []).length = monitorData[ipList[ipIdx]][0].length; points.fill("0");
+													pointsInitialised = 1;
+												}
+												addPoints = monitorData[ipList[ipIdx]][0];
+												for(var x = 0; x < points.length; x++)
+												{
+													points[x] = parseInt(points[x]) + parseInt(addPoints[x]);
+													points[x] = points[x].toString();
+												}
+											}
+										}
+									}
+									else
+									{
+										points = monitorData[ip][0];
+									}
+									
 									if(monitorIndex < 3)
 									{
 										plotLastTimePoint = monitorData[ip][1];
@@ -926,30 +987,6 @@ function expand(name)
 	runOnWindowLoad(name);
 }
 
-function highResChanged()
-{
-	setControlsEnabled(false, true, bndwS.RstGr);
-
-	var useHighRes15m = document.getElementById("use_high_res_15m").checked;
-	var commands = [];
-	commands.push("uci set gargoyle.bandwidth_display=bandwidth_display");
-	commands.push("uci set gargoyle.bandwidth_display.high_res_15m=" + (useHighRes15m ? "1" : "0"));
-	commands.push("uci commit");
-	commands.push("/etc/init.d/bwmon_gargoyle restart");
-
-	var stateChangeFunction = function(req)
-	{
-		if(req.readyState == 4)
-		{
-			window.location = window.location;
-			setControlsEnabled(true);
-		}
-	}
-	var param = getParameterDefinition("commands", commands.join("\n"))  + "&" + getParameterDefinition("hash", document.cookie.replace(/^.*hash=/,"").replace(/[\t ;]+.*$/, ""));
-	runAjax("POST", "utility/run_commands.sh", param, stateChangeFunction);
-
-}
-
 function deleteData()
 {
 	if (confirm(bndwS.DelAD) == false)
@@ -981,49 +1018,42 @@ function setCustBWMonVisibility()
 	var bwcustDisabled = document.getElementById("enable_custom_bwmon").checked == true ? false : true;
 	//document.getElementById("custom_time_frame").disabled = bwcustDisabled;	//Currently always disabled as we only want people to be able to set months
 	document.getElementById("custom_reset_day").disabled = bwcustDisabled;
-
-	checkCustBWMonChanges();
 }
 
-function checkCustBWMonChanges()
+function saveChanges()
 {
-	var orig_bwcustStatus = uciOriginal.get("gargoyle","bandwidth_display","custom_bwmon_enable");
-	var orig_bwcustResetDay = uciOriginal.get("gargoyle","bandwidth_display","month_reset_day");
-
-	var bwcustStatus = document.getElementById("enable_custom_bwmon").checked == true ? 1 : 0;
-	var bwcustResetDay = document.getElementById("custom_reset_day").value;
-
-	if((orig_bwcustStatus != bwcustStatus) || (orig_bwcustResetDay != bwcustResetDay))
-	{
-		//We must have changed something, allow saving
-		document.getElementById("bwcustSaveChanges").disabled = false;
-	}
-	else
-	{
-		document.getElementById("bwcustSaveChanges").disabled = true;
-	}
-}
-
-function bwcustSaveChanges()
-{
-	if (confirm(bndwS.CustBMonWarn) == false)
-	{
-		return;
-	}
-
 	setControlsEnabled(false, true, UI.WaitSettings);
 
-	var bwcustStatus = document.getElementById("enable_custom_bwmon").checked == true ? 1 : 0;
-	var bwcustResetDay = document.getElementById("custom_reset_day").value;
+	var uci = uciOriginal.clone();
+
+	var enableBwmon = byId('enable_bwmon').checked == true ? 1 : 0;
+	uci.set('bwmon_gargoyle','global','enabled',(enableBwmon ? "1" : "0"));
+
+	var useHighRes15m = byId("use_high_res_15m").checked;
+	uci.set('bwmon_gargoyle','global','high_res_15m',(useHighRes15m ? "1" : "0"));
+
+	var bwcustStatus = byId("enable_custom_bwmon").checked == true ? 1 : 0;
+	var bwcustResetDay = byId("custom_reset_day").value;
 	bwcustResetDay = bwcustResetDay == "" ? "0" : bwcustResetDay;
-	var commands = [];
-	commands.push("uci set gargoyle.bandwidth_display.custom_bwmon_enable=" + bwcustStatus);
-	commands.push("uci set gargoyle.bandwidth_display.month_reset_day=" + bwcustResetDay);
-	commands.push("uci commit gargoyle");
-	commands.push("/etc/init.d/bwmon_gargoyle stop");
-	commands.push("rm /tmp/data/bwmon/bdist6* 2>/dev/null");
-	commands.push("rm /usr/data/bwmon/bdist6* 2>/dev/null");
-	commands.push("/etc/init.d/bwmon_gargoyle start");
+	uci.set('bwmon_gargoyle','custom_monitor','enable',(bwcustStatus ? "1" : "0"));
+	uci.set('bwmon_gargoyle','custom_monitor','month_reset_day',bwcustResetDay);
+	var commands = uci.getScriptCommands(uciOriginal);
+	var restartCmd = "/etc/init.d/bwmon_gargoyle restart";
+	if(commands.search(/custom_monitor/) > -1)
+	{
+		// Making a change to custom bwmon
+		if(confirm(bndwS.CustBMonWarn) == false)
+		{
+			setControlsEnabled(true);
+			return;
+		}
+		commands = commands + "\nrm /tmp/data/bwmon/bdist6* 2>/dev/null";
+		commands = commands + "\nrm /usr/data/bwmon/bdist6* 2>/dev/null";
+		commands = "/etc/init.d/bwmon_gargoyle stop\n" + commands;
+		restartCmd = "/etc/init.d/bwmon_gargoyle start";
+	}
+
+	commands = commands + "\n" + restartCmd;
 
 	var stateChangeFunction = function(req)
 	{
@@ -1033,6 +1063,6 @@ function bwcustSaveChanges()
 			setControlsEnabled(true);
 		}
 	}
-	var param = getParameterDefinition("commands", commands.join("\n"))  + "&" + getParameterDefinition("hash", document.cookie.replace(/^.*hash=/,"").replace(/[\t ;]+.*$/, ""));
+	var param = getParameterDefinition("commands", commands)  + "&" + getParameterDefinition("hash", document.cookie.replace(/^.*hash=/,"").replace(/[\t ;]+.*$/, ""));
 	runAjax("POST", "utility/run_commands.sh", param, stateChangeFunction);
 }

@@ -23,18 +23,25 @@
 	done
 
 	echo "extScripts = new Array();"
-	external_scripts=$(ls /usr/lib/ddns-gargoyle 2&>1)
+	external_scripts=$(ls /usr/lib/ddns-gargoyle 2>/dev/null)
 	for script in $external_scripts ; do
 		echo "extScripts.push(\""$script"\");"
 	done
 
+	. /lib/functions/network.sh
+	network_get_device lan_iface lan || \
+		lan_iface=$(uci -q get network.lan.ifname)
+	network_get_device wan_iface wan || \
+		wan_iface=$(uci -q get network.wan.ifname)
+	echo "var lanIface=\"$lan_iface\";"
+	echo "var wanIface=\"$wan_iface\";"
 %>
 //-->
 </script>
 
 <h1 class="page-header"><%~ ddns.mDDNS %></h1>
 <div class="row">
-	<div class="col-lg-6">
+	<div class="col-lg-8">
 		<div class="panel panel-default">
 			<div class="panel-heading">
 				<h3 class="panel-title"><%~ ddns.DYSect %></h3>

@@ -50,14 +50,25 @@ function getEmbeddedSvgPlotFunction(embeddedId)
 	return null;
 }
 
-function getHostDisplay(ip)
+function getHostDisplay(ip,keepLongHost)
 {
+	// If keepLongHost is true, we return an array both the shortened host (if > 25char) and original
+	// Otherwise, just a string with the result
+	keepLongHost = keepLongHost === undefined ? false : keepLongHost;
 	var hostDisplay = getSelectedValue("host_display");
-	var host = ip;
+	var host = keepLongHost ? [ip,ip] : ip;
 	if(hostDisplay == "hostname" && ipToHostname[ip] != null)
 	{
-		host = ipToHostname[ip];
-		host = host.length < 25 ? host : host.substr(0,22)+"...";
+		if(keepLongHost)
+		{
+			host[1] = ipToHostname[ip];
+			host[0] = host[1].length < 25 ? host[1] : host[1].substr(0,22)+"...";
+		}
+		else
+		{
+			host = ipToHostname[ip];
+			host = host.length < 25 ? host : host.substr(0,22)+"...";
+		}
 	}
 	return host;
 }
@@ -65,11 +76,18 @@ function getHostDisplay(ip)
 
 function getHostList(ipList)
 {
-	var hostList = [];
+	// [[host (shortened)],[ip],[host]]
+	var hostList = [[],[],[]];
 	var ipIndex =0;
 	for(ipIndex=0; ipIndex < ipList.length; ipIndex++)
 	{
-		hostList.push( getHostDisplay(ipList[ipIndex]));
+		host = getHostDisplay(ipList[ipIndex],true);
+		if(hostList[2].indexOf(host[1]) < 0)
+		{
+			hostList[0].push(host[0]);
+			hostList[1].push(ipList[ipIndex]);
+			hostList[2].push(host[1]);
+		}
 	}
 	return hostList;
 }
@@ -147,6 +165,13 @@ function doUpdate()
 					var nextDate = new Date();
 					nextDate.setTime(latestTime*1000);
 					nextDate.setUTCMinutes( nextDate.getUTCMinutes()+tzMinutes );
+					if((isNaN(parseInt(uploadName))) && (uploadName.match(/month/) || uploadName.match(/day/)))
+					{
+						// When interval is month or day, the transition is always at beginning of day/month, so adding just a few hours will never change the day or month
+						// However, when an hour gets subtracted for DST, there are problems.
+						// So, always add three hours, so when DST shifts an hour back in November date doesn't get pushed back to previous month and wrong month is displayed
+						nextDate = new Date( nextDate.getTime() + (3*60*60*1000))
+					}
 					var nextIntervalStart = nextDate.valueOf()/1000;
 
 					timeFrameIntervalData = [];
@@ -259,7 +284,23 @@ function resetTimeFrame()
 	doUpdate();
 }
 
+function getAllIPForHostname(hostname)
+{
+	var ipList = [];
+	for(ip in ipToHostname)
+	{
+		if(ipToHostname[ip] == hostname)
+		{
+			ipList.push(ip);
+		}
+	}
+	if(ipList.length == 0)
+	{
+		ipList.push(hostname);
+	}
 
+	return ipList;
+}
 
 
 function resetDisplayInterval()
@@ -273,13 +314,49 @@ function resetDisplayInterval()
 		intervalIndex = intervalIndex == null ? 0 : intervalIndex;
 
 		var data = timeFrameIntervalData[intervalIndex];
-		var pieTotals = plotFunction(idList, [bndwS.Totl, bndwS.Dnld, bndwS.Upld ], getHostList(idList), data, 0, 9, resetColors);
+		var tmpdata = [[],[],[]];
+		var tmpipList = [];
+		var tmpidList = [];
+		if(getSelectedValue("host_display") == "hostname")
+		{
+			var hostLists = getHostList(idList);
+			for(var x = 0; x < hostLists[0].length; x++)
+			{
+				var host = hostLists[0][x];
+				var hip = hostLists[1][x];
+				var longhost = hostLists[2][x];
+				var ipList = getAllIPForHostname(longhost);
+				var ipData = [];
+				for(ip in ipList)
+				{
+					ididx = idList.indexOf(ipList[ip]);
+					if(ididx >= 0)
+					{
+						ipData[0] === undefined ? ipData.push(data[0][ididx]) : ipData[0] += data[0][ididx];
+						ipData[1] === undefined ? ipData.push(data[1][ididx]) : ipData[1] += data[1][ididx];
+						ipData[2] === undefined ? ipData.push(data[2][ididx]) : ipData[2] += data[2][ididx];
+					}
+				}
+				tmpdata[0].push(ipData[0]);
+				tmpdata[1].push(ipData[1]);
+				tmpdata[2].push(ipData[2]);
+				tmpidList.push(host);
+				tmpipList.push(hip);
+			}
+		}
+		else
+		{
+			tmpidList = idList;
+			tmpdata = data;
+			tmpipList = tmpidList;
+		}
+		var pieTotals = plotFunction(tmpipList, [bndwS.Totl, bndwS.Dnld, bndwS.Upld ], tmpidList, tmpdata, 0, 9, resetColors);
 		resetColors = false;
 
 		//then update table, sorting ids by combined bw so it is easier to read
 		var sortedIdIndices = [];
 		var idIndex;
-		for(idIndex=0; idIndex < idList.length; idIndex++) { sortedIdIndices.push(idIndex) };
+		for(idIndex=0; idIndex < tmpipList.length; idIndex++) { sortedIdIndices.push(idIndex) };
 		var idSort = function(a,b) { return data[0][a] < data[0][b] ? 1 : -1; }
 		sortedIdIndices.sort( idSort );
 
@@ -292,9 +369,9 @@ function resetDisplayInterval()
 		{
 			idIndex=0;
 			var pieIsZero = true;
-			for(idIndex=0; idIndex < idList.length; idIndex++)
+			for(idIndex=0; idIndex < tmpipList.length; idIndex++)
 			{
-				pieIsZero = pieIsZero && data[pieIndex][idIndex] == 0;
+				pieIsZero = pieIsZero && tmpdata[pieIndex][idIndex] == 0;
 			}
 			zeroPies.push(pieIsZero);
 		}
@@ -303,7 +380,7 @@ function resetDisplayInterval()
 		for(idIndex=0; idIndex < sortedIdIndices.length; idIndex++)
 		{
 			var index = sortedIdIndices[idIndex];
-			var id = idList[ index ];
+			var id = tmpipList[ index ];
 			id =  id == currentWanIp ? currentLanIp : id ;
 
 			var tableRow = [getHostDisplay(id)];
@@ -311,14 +388,14 @@ function resetDisplayInterval()
 			var allZero = true;
 			for(pieIndex=0;pieIndex < pieNames.length; pieIndex++)
 			{
-				var value = parseBytes(data[pieIndex][index]);
+				var value = parseBytes(tmpdata[pieIndex][index]);
 				value = value.replace("ytes", "");
 				tableRow.push(value);
-				sum[pieIndex] = sum[pieIndex] + data[pieIndex][index];
+				sum[pieIndex] = sum[pieIndex] + tmpdata[pieIndex][index];
 			}
 			for(pieIndex=0;pieIndex < pieNames.length; pieIndex++)
 			{
-				var percent = zeroPies[pieIndex] ? 100/idList.length : data[pieIndex][index]*100/pieTotals[pieIndex];
+				var percent = zeroPies[pieIndex] ? 100/tmpipList.length : tmpdata[pieIndex][index]*100/pieTotals[pieIndex];
 				var pctStr = "" + (parseInt(percent*10)/10) + "%";
 				tableRow.push(pctStr);
 			}

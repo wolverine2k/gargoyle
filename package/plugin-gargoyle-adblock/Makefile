@@ -1,8 +1,8 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=plugin_gargoyle_adblock
-PKG_VERSION:=20160718
-PKG_RELEASE:=1.2.0
+PKG_VERSION:=20191111
+PKG_RELEASE:=1.2.2
 
 PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION)
 
@@ -14,7 +14,7 @@ define Package/plugin-gargoyle-adblock
 	SUBMENU:=Gargoyle Web Interface
 	TITLE:=DNS Adblocking support for Gargoyle
 	MAINTAINER:=Michael Gray <support@lantisproject.com>
-	DEPENDS:=+gargoyle +iptables-mod-nat-extra +iptables-mod-iprange
+	DEPENDS:=+gargoyle
 	PKGARCH:=all
 endef
 
@@ -52,7 +52,7 @@ endef
 define Package/plugin-gargoyle-adblock/prerm
 #!/bin/sh
 
-sh /usr/lib/runadblock.sh -disable
+sh /usr/lib/adblock/runadblock.sh -disable
 endef
 
 define Package/plugin-gargoyle-adblock/postrm

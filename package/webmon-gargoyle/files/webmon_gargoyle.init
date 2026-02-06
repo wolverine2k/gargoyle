@@ -3,8 +3,6 @@ START=85
 
 include /lib/network
 
-
-
 backup_script="/tmp/do_webmon_backup.sh"
 tmp_cron="/tmp/tmp.cron"
 
@@ -27,6 +25,8 @@ update_cron()
 
 start()
 {
+	. /lib/functions/network.sh
+	
 	config_load webmon_gargoyle
 	config_get max_domains webmon max_domains
 	config_get max_searches webmon max_searches
@@ -34,13 +34,15 @@ start()
 	config_get search_save_path webmon search_save_path
 	config_get exclude_ips webmon exclude_ips
 	config_get include_ips webmon include_ips
+	config_get exclude_ip6s webmon exclude_ip6s
+	config_get include_ip6s webmon include_ip6s
 
 	config_get_bool enabled webmon 'enabled' '0'
 	[ "$enabled" -gt 0 ] || return
 
-	wan_if=$(uci -P "/var/state" get network.wan.ifname)
+	network_get_device wan_if wan || \
+		wan_if=$(uci -q get network.wan.device)
 	if [ -n "$wan_if" ] ; then
-		
 		#load save path, creating directory if necessary
 		if [ -z "$domain_save_path" ] ; then
 			domain_save_path=/usr/data/webmon_domains.txt
@@ -62,34 +64,50 @@ start()
 		fi
 	
 		#remove existing rules
-		delete_chain_from_table filter web_monitor
-		iptables -t filter -N web_monitor
-		iptables -t filter -I FORWARD -o "$wan_if" -j web_monitor
+		delete_chain_from_table inet fw4 web_monitor
+		nft add chain inet fw4 web_monitor
+		nft insert rule inet fw4 forward oifname "$wan_if" jump web_monitor
 
 		#load parameters and insert rule
 		webmon_params=""
+		exclude=""
+		include=""
 		if [ -n "$max_domains" ] ; then
-			webmon_params="$webmon_params --max_domains $max_domains"
+			webmon_params="$webmon_params max-domains $max_domains"
 		fi
 		if [ -n "$max_searches" ] ; then
-			webmon_params="$webmon_params --max_searches $max_searches"
+			webmon_params="$webmon_params max-searches $max_searches"
 		fi
 		if [ -n "$exclude_ips" ] ; then
-			webmon_params="$webmon_params --exclude_ips $exclude_ips"
+			exclude="$exclude_ips"
+			#webmon_params="$webmon_params exclude-ips \"$exclude_ips\""
 		fi
-		if [ -n "$include_ips" ] && [ -z "$exclude_ips" ] ; then
-			webmon_params="$webmon_params --include_ips $include_ips"
+		if [ -n "$exclude_ip6s" ] ; then
+			[ -n "$exclude" ] && exclude="$exclude,"
+			exclude="$exclude$exclude_ip6s"
+			#webmon6_params="$webmo6n_params --exclude_ips $exclude_ip6s"
+		fi
+		if [ -n "$include_ips" ] && [ -z "$exclude" ] ; then
+			include="$include_ips"
+			#webmon_params="$webmon_params include-ips \"$include_ips\""
+		fi
+		if [ -n "$include_ip6s" ] && [ -z "$exclude" ] ; then
+			[ -n "$include" ] && include="$include,"
+			include="$include$include_ip6s"
+			#webmon6_params="$webmon6_params --include_ips $include_ip6s"
 		fi
 		
+		[ -n "$exclude" ] && webmon_params="$webmon_params exclude-ips \"$exclude\""
+		[ -n "$include" ] && webmon_params="$webmon_params include-ips \"$include\""
 		
 		if   [ -e "$search_save_path" ] && [ -e "$domain_save_path" ] ; then
-			iptables -t filter -I web_monitor -m webmon $webmon_params --search_load_file "$search_save_path" --domain_load_file "$domain_save_path"
+			nft insert rule inet fw4 web_monitor webmon $webmon_params search-load-file \""$search_save_path"\" domain-load-file \""$domain_save_path"\"
 		elif [ -e "$search_save_path" ] ; then
-			iptables -t filter -I web_monitor -m webmon $webmon_params --search_load_file "$search_save_path" --clear_domain
+			nft insert rule inet fw4 web_monitor webmon $webmon_params search-load-file \""$search_save_path"\" clear-domain
 		elif [ -e "$domain_save_path" ] ; then
-			iptables -t filter -I web_monitor -m webmon $webmon_params --domain_load_file "$domain_save_path" --clear_search
+			nft insert rule inet fw4 web_monitor webmon $webmon_params domain-load-file \""$domain_save_path"\" clear-search
 		else
-			iptables -t filter -I web_monitor -m webmon $webmon_params --clear_domain --clear_search
+			nft insert rule inet fw4 web_monitor webmon $webmon_params clear-domain clear-search
 		fi
 		
 
@@ -117,17 +135,16 @@ stop()
 	cat /etc/crontabs/root | grep -v "$backup_script" > "$tmp_cron"
 	update_cron
 
-
 	#clear module data, and remove web_monitor chain
-	iptables -t filter -D web_monitor 1          >/dev/null 2>&1
-	iptables -t filter -A web_monitor -j RETURN  >/dev/null 2>&1
-	iptables -t filter -A web_monitor -m webmon --clear_domain --clear_search >/dev/null 2>&1
-	delete_chain_from_table filter web_monitor
+	nft flush chain inet fw4 web_monitor
+	nft add rule inet fw4 web_monitor return
+	nft add rule inet fw4 web_monitor webmon clear-domain clear-search
+	delete_chain_from_table inet fw4 web_monitor
 }
 
 restart()
 {
-	webmon_rules=$(( $(iptables -L web_monitor 2>/dev/null | wc -l)-2 )) 
+	webmon_rules=$(( $(nft list chain inet fw4 web_monitor 2>/dev/null | wc -l)-4 ))
 	if [ $webmon_rules -gt 0 ] ; then
 		stop
 	fi

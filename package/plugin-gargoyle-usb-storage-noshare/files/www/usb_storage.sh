@@ -6,7 +6,7 @@
 	# itself remain covered by the GPL.
 	# See http://gargoyle-router.com/faq.html#qfoss for more information
 	eval $( gargoyle_session_validator -c "$COOKIE_hash" -e "$COOKIE_exp" -a "$HTTP_USER_AGENT" -i "$REMOTE_ADDR" -r "login.sh" -t $(uci get gargoyle.global.session_timeout) -b "$COOKIE_browser_time"  )
-	gargoyle_header_footer -h -s "system" -p "usb_storage" -j "gs_sortable.js table.js usb_storage.js" -z "usb_storage.js" gargoyle network firewall nfsd samba vsftpd share_users
+	gargoyle_header_footer -h -s "system" -p "usb_storage" -j "gs_sortable.js table.js usb_storage.js" -z "usb_storage.js" gargoyle network firewall nfsd samba ksmbd vsftpd share_users
 
 %>
 
@@ -27,9 +27,9 @@
 	#ugly one-liner
 	#unmounted_drives=$( drives=$(cat /tmp/drives_found.txt | grep "dev" | sed 's/[0-9]:.*$//g' | uniq) ; for d in $drives ; do mounted=$(cat /proc/mounts | awk '$1 ~ /dev/ { print $1 }' | uniq |  grep "$d") ; if [ -z "$mounted" ] ; then echo "$d" ; fi  ; done )
 
-	drives="$(awk  -F':' '$1 ~ /^\/dev\// { sub(/[0-9]+$/, "", $1); arr[$1]; } END { for (x in arr) { print x; } }' /tmp/drives_found.txt)"
+	drives="$(awk  -F':' '$1 ~ /^\/dev\/sd[a-z]/ { sub(/[0-9]+$/, "", $1); arr[$1]; } $1 ~ /^\/dev\/mmcblk/ { sub(/p[0-9]+$/, "", $1); arr[$1]; } END { for (x in arr) { print x; } }' /tmp/drives_found.txt)"
 	for d in ${drives}; do
-		if awk -v devpath="^${d}[0-9]+" '$1 ~ devpath { is_mounted = "yes"} END { if (is_mounted == "yes") { exit 1; } }' /proc/mounts; then
+		if awk -v devpath="^${d}p*[0-9]+" '$1 ~ devpath { is_mounted = "yes"} END { if (is_mounted == "yes") { exit 1; } }' /proc/mounts; then
 			size=$(( 1024 * $(fdisk -s "$d") ))
 			DRIVE=$(echo ${d##/*/})
 			if [ -e "/sys/class/block/$DRIVE/device/model" ]; then
@@ -42,10 +42,19 @@
 			echo "drivesWithNoMounts.push( [ \"$d\", \"$size\", \"$DRIVE\" ] );"
 		fi
 	done
-	echo "var extroot_enabled=\""$(mount | grep "/dev/sd.*on /overlay" | wc -l)"\";"
-	echo "var extroot_drive=\""$(mount | awk '/\/dev\/sd.*on \/overlay/ {print $1}')"\";"
+	echo "var extroot_enabled=\""$(mount | grep "/dev/[sm][dm].*on /overlay" | wc -l)"\";"
+	echo "var extroot_drive=\""$(mount | awk '/\/dev\/[sm][dm].*on \/overlay/ {print $1}')"\";"
 
-	echo "var fullVariant=\""$(opkg list-installed 2>&1 | grep plugin-gargoyle-usb-storage-full)"\";"
+	echo "var fullVariant=\""$(gpkg list-installed plugin-gargoyle-usb-storage-full 2>&1)"\";"
+
+	whichksmbd="$(which ksmbd.mountd)"
+	[ -n "$whichksmbd" ] && echo "var sambapkg=\"ksmbd\";" || echo "var sambapkg=\"samba\";"
+
+	wgiface="$(ls /sys/class/net | grep "wg")"
+	[ -n "$wgiface" ] && echo "var wireguardrunning=true;" || echo "var wireguardrunning=false;"
+	ovpniface="$(ls /sys/class/net | grep "tun")"
+	[ -n "$ovpniface" ] && echo "var openvpnrunning=true;" || echo "var openvpnrunning=false;"
+
 %>
 //-->
 </script>
@@ -87,8 +96,8 @@
 						<label id='ftp_wan_access_label' for='ftp_wan_pasv'><%~ WpFTP %></label>
 					</span>
 					<span class="col-xs-7">
-						<input class="form-control" type="text" size='7' maxLength='5' onkeyup='proofreadPort(this)' id='pasv_min_port' />&nbsp;-&nbsp;
-						<input class="form-control" type="text" size='7' maxLength='5' onkeyup='proofreadPort(this)' id='pasv_max_port' />
+						<input class="form-control" type="text" size='7' maxLength='5' oninput='proofreadPort(this)' id='pasv_min_port' />&nbsp;-&nbsp;
+						<input class="form-control" type="text" size='7' maxLength='5' oninput='proofreadPort(this)' id='pasv_max_port' />
 					</span>
 				</div>
 
@@ -97,6 +106,13 @@
 				<div id="cifs_workgroup_container" class="row form-group" style="margin-bottom:20px;">
 					<label class="col-xs-5" id="cifs_workgroup_label" for="cifs_workgroup"><%~ CFWkg %>:</label>
 					<span class="col-xs-7"><input id="cifs_workgroup" class="form-control" type="text" size='30'/></span>
+				</div>
+
+				<div id="cifs_vpn_container" class="row form-group" style="margin-bottom:20px;">
+					<span class="col-xs-12">
+						<input type='checkbox' id='cifs_vpn_access'/>
+						<label id='cifs_ovpn_access_label' for='cifs_ovpn_access'><%~ VPNCIFS %></label>
+					</span>
 				</div>
 
 				<span id="cifs_user_label" style="text-decoration:underline"><%~ CFUsr %>:</span>
@@ -156,6 +172,26 @@
 			</div>
 		</div>
 	</div>
+
+	<div id="disk_mount" class="col-lg-6">
+		<div class="panel panel-default">
+			<div class="panel-heading">
+				<h3 class="panel-title"><%~ Mnt %></h3>
+			</div>
+
+			<div class="panel-body">
+				<div class="row form-group">
+					<span class="col-xs-12">
+						<div class="alert alert-warning"><em><%~ MntWarn %></em></div>
+					</span>
+					<span class="col-xs-12">
+						<button id="mount_usb_button" class="btn btn-warning btn-lg" onclick="mountAllUsb()"><%~ MntB %></button>
+					</span>
+				</div>
+			</div>
+		</div>
+	</div>
+
 </div>
 
 <div class="row">
@@ -183,14 +219,14 @@
 				<div id="swap_percent_container" class="row form-group">
 					<label class="col-xs-5" id="swap_percent_label" for="swap_percent"><%~ PSwap %>:</label>
 					<span class="col-xs-7">
-						<input id="swap_percent" class="form-control" type="text" onkeyup="updateFormatPercentages(this.id)" /><em><span id="swap_size"></span></em>
+						<input id="swap_percent" class="form-control" type="text" oninput="updateFormatPercentages(this.id)" /><em><span id="swap_size"></span></em>
 					</span>
 				</div>
 
 				<div id="storage_percent_container" class="row form-group">
 					<label class="col-xs-5" id="storage_percent_label" for="storage_percent"><%~ PStor %>:</label>
 					<span class="col-xs-7">
-						<input id="storage_percent" class="form-control" type="text" onkeyup="updateFormatPercentages(this.id)" /><em><span id="storage_size"></span></em>
+						<input id="storage_percent" class="form-control" type="text" oninput="updateFormatPercentages(this.id)" /><em><span id="storage_size"></span></em>
 					</span>
 				</div>
 

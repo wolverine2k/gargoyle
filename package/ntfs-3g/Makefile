@@ -1,6 +1,4 @@
 #
-# Copyright (C) 2007-2016 OpenWrt.org
-#
 # This is free software, licensed under the GNU General Public License v2.
 # See /LICENSE for more information.
 #
@@ -8,33 +6,30 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=ntfs-3g
+PKG_VERSION:=2022.10.3
 PKG_RELEASE:=1
 
-PKG_VERSION:=2016.2.22
 PKG_SOURCE:=$(PKG_NAME)_ntfsprogs-$(PKG_VERSION).tgz
-PKG_SOURCE_URL:=http://www.tuxera.com/opensource/
-PKG_MD5SUM:=ccbe8672d0f757bd0c975b50aa4c512e
+PKG_SOURCE_URL:=https://www.tuxera.com/opensource/
+PKG_HASH:=f20e36ee68074b845e3629e6bced4706ad053804cbaf062fbae60738f854170c
 
-PKG_LICENSE:=GPL-2.0 LGPL-2.0
+PKG_LICENSE:=GPL-2.0-only LGPL-2.1-or-later
 PKG_LICENSE_FILES:=COPYING COPYING.LIB
-
-PKG_MAINTAINER:=Ted Hess <thess@kitschensync.net>
+PKG_CPE_ID:=cpe:/a:tuxera:ntfs-3g
 
 PKG_FIXUP:=autoreconf
 PKG_INSTALL:=1
-
-# release contains fuseext/int hint
-PKG_RELEASE:=$(PKG_RELEASE)$(if $(CONFIG_PACKAGE_NTFS-3G_USE_LIBFUSE),-fuseext,-fuseint)
+PKG_BUILD_PARALLEL:=1
 
 # define build dir, respect fuseext/int
-PKG_BUILD_DIR := $(BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION)-$(PKG_RELEASE)
+PKG_BUILD_DIR:= $(BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION)
 
 include $(INCLUDE_DIR)/package.mk
 
 define Package/ntfs-3g/common
   SECTION:=utils
   CATEGORY:=Utilities
-  URL:=http://www.tuxera.com
+  URL:=https://www.tuxera.com
   SUBMENU:=Filesystem
   TITLE:=Stable Read/Write NTFS Driver
 endef
@@ -62,12 +57,16 @@ define Package/ntfs-3g/config
 config PACKAGE_NTFS-3G_USE_LIBFUSE
 	bool "use external FUSE library, selects package libfuse"
 	depends on PACKAGE_ntfs-3g
-	---help---
+	help
 	Ntfs-3g by default uses a minimalized lite version of FUSE.
 	If libfuse is part of your filesystem anyway (because of sshfs, owfs
 	etc.) it makes sense to activate this option and save some kilobytes
 	of space.
 
+config PACKAGE_NTFS-3G_HAS_PROBE
+	bool "install the ntfs-3g.probe utility"
+	depends on PACKAGE_ntfs-3g
+	default y
 endef
 
 define Package/ntfs-3g-low
@@ -87,22 +86,8 @@ define Package/ntfs-3g-low/description
 
 endef
 
-define Package/ntfs-3g-utils
-  $(call Package/ntfs-3g/common)
-  TITLE:=ntfs-3g utilities (extra)
-  DEPENDS+= +ntfs-3g
-endef
 
 define Package/ntfs-3g-utils/description
-  Additional ntfs-3g utilities. Not included by default for size
-  considerations.
-
-  Currently:
-   - ntfs-3g.secaudit
-   - ntfs-3g.usermap
-endef
-
-define Package/ntfsprogs_ntfs-3g/description
   Suite of NTFS utilities for doing neat things with NTFS.
   Contains:
    - mkntfs - Create an NTFS filesystem.
@@ -111,17 +96,19 @@ define Package/ntfsprogs_ntfs-3g/description
    - ntfscluster - Locate the files which use the given sectors or clusters.
    - ntfscmp - Compare two NTFS filesystems and tell the differences.
    - ntfscp - Copy a file to an NTFS volume.
+   - ntfssecaudit - Display ownership and permissions, check consistency
    - ntfsfix - Check and fix some common errors, clear the LogFile.
    - ntfsinfo - Show information about NTFS or one of the files or directories within it.
    - ntfslabel - Show, or set, an NTFS filesystem's volume label.
    - ntfsls - List information about files in a directory residing on an NTFS.
    - ntfsresize - Resize NTFS without losing data.
    - ntfsundelete - Recover deleted files from NTFS.
+   - ntfsusermap - Define mapping of Windows accounts to Linux logins
 endef
 
-define Package/ntfsprogs_ntfs-3g
+define Package/ntfs-3g-utils
   $(call Package/ntfs-3g/common)
-  TITLE:=ntfsprogs (ntfs-3g)
+  TITLE:=ntfs-3g utilities
   DEPENDS+= +ntfs-3g +libgcrypt +libuuid
 endef
 
@@ -139,11 +126,11 @@ else
 	TARGET_CPPFLAGS:=-I../include/fuse-lite $(TARGET_CPPFLAGS)
 endif
 
-# enable disable ntfsprogs
-ifneq ($(CONFIG_PACKAGE_ntfsprogs_ntfs-3g)$(SDK)$(DEVELOPER),)
-	CONFIGURE_ARGS += --enable-ntfsprogs
+# enable ntfsprogs and extras
+ifneq ($(CONFIG_PACKAGE_ntfs-3g-utils)$(SDK)$(DEVELOPER),)
+	CONFIGURE_ARGS += --enable-ntfsprogs --enable-extras
 else
-	CONFIGURE_ARGS += --disable-ntfsprogs
+	CONFIGURE_ARGS += --disable-ntfsprogs --disable-extras
 endif
 
 # redefine prepare to extract to our build dir
@@ -164,12 +151,12 @@ endef
 
 define Package/ntfs-3g/install
 	$(INSTALL_DIR) $(1)/usr/bin
-	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/usr/bin/ntfs-3g{,.probe} $(1)/usr/bin/
+	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/usr/bin/ntfs-3g $(1)/usr/bin/
+	$(if $(CONFIG_PACKAGE_NTFS-3G_HAS_PROBE),$(INSTALL_BIN) $(PKG_INSTALL_DIR)/usr/bin/ntfs-3g.probe $(1)/usr/bin/,)
 	$(INSTALL_DIR) $(1)/usr/lib
 	$(CP) $(PKG_INSTALL_DIR)/usr/lib/libntfs-3g.so.* $(1)/usr/lib/
 	$(INSTALL_DIR) $(1)/sbin
-	$(CP) $(PKG_INSTALL_DIR)/sbin/mount.ntfs-3g $(1)/sbin/
-	$(CP) $(PKG_INSTALL_DIR)/sbin/mount.ntfs-3g $(1)/sbin/mount.ntfs
+	$(LN) ../usr/bin/ntfs-3g $(1)/sbin/mount.ntfs-3g
 endef
 
 define Package/ntfs-3g/postinst
@@ -193,7 +180,7 @@ define Package/ntfs-3g-low/install
 	$(INSTALL_DIR) $(1)/usr/bin
 	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/usr/bin/lowntfs-3g $(1)/usr/bin/
 	$(INSTALL_DIR) $(1)/sbin
-	$(CP) $(PKG_INSTALL_DIR)/sbin/mount.lowntfs-3g $(1)/sbin/
+	$(LN) ../usr/bin/lowntfs-3g $(1)/sbin/mount.lowntfs-3g
 endef
 
 define Package/ntfs-3g-low/postinst
@@ -214,21 +201,13 @@ fi
 endef
 
 define Package/ntfs-3g-utils/install
-	$(INSTALL_DIR) $(1)/usr/bin
-	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/usr/bin/ntfs-3g.secaudit $(1)/usr/bin
-	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/usr/bin/ntfs-3g.usermap $(1)/usr/bin
-endef
-
-define Package/ntfsprogs_ntfs-3g/install
-	$(INSTALL_DIR) $(1)/sbin
-	$(CP) $(PKG_INSTALL_DIR)/sbin/mkfs.ntfs $(1)/sbin/
-	$(INSTALL_DIR) $(1)/usr/bin
+	rm -f $(PKG_INSTALL_DIR)/usr/sbin/mkfs.ntfs
+	$(INSTALL_DIR) $(1)/usr/{bin,sbin}
 	$(FIND) $(PKG_INSTALL_DIR)/usr/bin/ -type f ! -regex '.*[^/]*ntfs-3g[^/]*' -exec $(INSTALL_BIN) {} $(1)/usr/bin/ \;
-	$(INSTALL_DIR) $(1)/usr/sbin
 	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/usr/sbin/* $(1)/usr/sbin/
+	$(LN) mkntfs $(1)/usr/sbin/mkfs.ntfs
 endef
 
 $(eval $(call BuildPackage,ntfs-3g))
 $(eval $(call BuildPackage,ntfs-3g-low))
 $(eval $(call BuildPackage,ntfs-3g-utils))
-$(eval $(call BuildPackage,ntfsprogs_ntfs-3g))

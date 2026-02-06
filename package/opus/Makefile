@@ -8,18 +8,19 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=opus
-PKG_VERSION:=1.1.4
+PKG_VERSION:=1.5.2
 PKG_RELEASE:=1
 
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
-PKG_SOURCE_URL:=http://downloads.xiph.org/releases/opus/
-PKG_MD5SUM:=a2c09d995d0885665ff83b5df2505a5f
-PKG_HASH:=9122b6b380081dd2665189f97bfd777f04f92dc3ab6698eea1dbb27ad59d8692
+PKG_SOURCE_URL:=https://downloads.xiph.org/releases/opus
+PKG_HASH:=65c1d2f78b9f2fb20082c38cbe47c951ad5839345876e46941612ee87f9a7ce1
 
+PKG_MAINTAINER:=Ted Hess <thess@kitchensync.net>, Ian Leonard <antonlacon@gmail.com>
 PKG_LICENSE:=BSD-3-Clause
 PKG_LICENSE_FILES:=COPYING
-PKG_MAINTAINER:=Ted Hess <thess@kitchensync.net> Ian Leonard <antonlacon@gmail.com>
+PKG_CPE_ID:=cpe:/a:opus-codec:opus
 
+PKG_BUILD_PARALLEL:=1
 PKG_INSTALL:=1
 
 include $(INCLUDE_DIR)/package.mk
@@ -28,7 +29,7 @@ define Package/libopus
   SECTION:=libs
   CATEGORY:=Libraries
   TITLE:=OPUS Audio Codec
-  URL:=http://opus-codec.org/
+  URL:=https://opus-codec.org
 endef
 
 define Package/libopus/description
@@ -46,8 +47,12 @@ ifeq ($(CONFIG_SOFT_FLOAT),y)
 		--enable-fixed-point
 endif
 
-CPU_ASM_BLACKLIST:=xscale arm926ej-s
+ifneq ($(findstring neon,$(CONFIG_CPU_TYPE))$(findstring aarch64,$(CONFIG_ARCH)),)
+	CONFIGURE_ARGS+= \
+		--enable-fixed-point
+endif
 
+CPU_ASM_BLACKLIST:=xscale arm926ej-s
 ifneq ($(findstring $(call qstrip,$(CONFIG_CPU_TYPE)),$(CPU_ASM_BLACKLIST)),)
 	CONFIGURE_ARGS+= --disable-asm
 endif

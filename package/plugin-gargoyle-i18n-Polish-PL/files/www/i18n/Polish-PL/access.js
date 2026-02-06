@@ -10,7 +10,14 @@ accessStr.Local_S_Port="Lokalny port HTTPS";
 accessStr.RemoteWebAccess="Zdalny dostęp";
 accessStr.RemotePort="Zdalny port HTTP";
 accessStr.Remote_S_Port="Zdalny port HTTPS";
+accessStr.LockoutWarning="<b>UWAGA:</b> Zaraz się zamkniesz!";
+accessStr.ReverseProxySmooth="Dla płynnego przejścia";
+accessStr.ReverseProxySelect="Wybierz";
+accessStr.ReverseProxySaveCh="i zapisz zmiany";
+accessStr.ReverseProxySwitch="Zmień protokół wysyłania zwrotnego proxy na";
+accessStr.AccessChain="Twój łańcuch dostępu";
 accessStr.Session="Czas trwania sesji";
+accessStr.DisableRFC1918Filter="Włącz dostęp z prywatnego adresu IP (RFC 1918) do publicznego adresu IP";
 accessStr.DisablePassword="Wyłącz hasło dostępu do panelu";
 accessStr.warning="niepolecane!";
 accessStr.SSHAccess="Dostęp do SSH";
@@ -35,6 +42,7 @@ accessStr.SSHHelp3b="Windows utrzymuje prywatne klucze w <code>C:\Documents and 
 accessStr.SSHHelp4="<b>Klucz prywatny</b> powienien być przechowywany w bezpiecznym miejscu. Tylko <b>klucz publiczny</b> (<i>gargoyle.pub</i>) powinien być przesłany do Gargoyle. Gargoyle akceptuje wiele kluczy publicznych.";
 accessStr.SSHInvalidKey="Błędny klucz\nupewnij się że plik zawiera poprawny klucz publiczny SSH.";
 accessStr.CnntDsblPwd="Nie można wyłączyć uwierzytelniania hasłem bez ustawienia kluczy";
+accessStr.NoIP6Redi="Przekierowanie portu nie jest obsługiwane w przypadku IPv6. Jeśli wybierzesz różne porty lokalne i zdalne, interfejs internetowy nie będzie dostępny zdalnie przez IPv6.";
 
 //javascript
 accessStr.PasswordsDiffer="Hasło nie może być potwierdzone. Podane hasła nie zgadzają się.";
